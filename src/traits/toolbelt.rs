@@ -16,16 +16,8 @@ pub struct ParameterSchema {
     pub required: bool,
 }
 
-pub trait ToolBelt {
-    fn description(&self) -> &'static str;
-    fn use_tool(&self, name: &str, args: &Value) -> Result<String>;
-    fn list_tools(&self) -> Vec<&'static str>;
-    fn get_tool_schemas(&self) -> Vec<ToolSchema>;
-}
-
-pub struct ToolChest(pub fn() -> Box<dyn ToolBelt + Send + Sync>);
-
-inventory::collect!(ToolChest);
+/// Type alias for tool handler functions used in the registry
+pub type ToolHandler = fn(&Value) -> Result<String>;
 
 #[macro_export]
 macro_rules! register_toolbelt {
@@ -42,50 +34,45 @@ macro_rules! register_toolbelt {
             }
         }
     ) => {
-        use phf::phf_map;
+        use once_cell::sync::Lazy;
 
-        type ToolHandler = fn(&$toolbelt_type, &serde_json::Value) -> anyhow::Result<String>;
+        // Lazy singleton instance
+        pub static INSTANCE: Lazy<$toolbelt_type> = Lazy::new(<$toolbelt_type>::default);
 
-        static TOOL_HANDLERS: phf::Map<&'static str, ToolHandler> = phf_map! {
-            $($name => $toolbelt_type::$method),*
-        };
-
-        impl ToolBelt for $toolbelt_type {
-            fn description(&self) -> &'static str {
-                $toolbelt_desc
-            }
-
-            fn use_tool(&self, name: &str, args: &serde_json::Value) -> anyhow::Result<String> {
-                match TOOL_HANDLERS.get(name) {
-                    Some(handler) => handler(self, args),
-                    None => Err(anyhow::anyhow!("Tool '{}' not found in toolbelt", name)),
+        // Generate wrapper functions that call the singleton
+        $(
+            paste::paste! {
+                pub fn [<$method _handler>](args: &serde_json::Value) -> anyhow::Result<String> {
+                    INSTANCE.$method(args)
                 }
             }
+        )*
 
-            fn list_tools(&self) -> Vec<&'static str> {
-                vec![$($name),*]
-            }
-
-            fn get_tool_schemas(&self) -> Vec<ToolSchema> {
-                vec![
-                    $(
-                        ToolSchema {
-                            name: $name,
-                            description: $desc,
-                            parameters: vec![
-                                $(
-                                    ParameterSchema {
-                                        name: $param_name,
-                                        type_name: $param_type,
-                                        description: $param_desc,
-                                        required: true,
-                                    }
-                                ),*
-                            ],
-                        }
-                    ),*
-                ]
-            }
+        // Tool entries for registry (namespaced: "TypeName::tool_name")
+        paste::paste! {
+            pub static TOOL_ENTRIES: &[(&str, $crate::traits::ToolHandler)] = &[
+                $((concat!(stringify!($toolbelt_type), "::", $name), [<$method _handler>])),*
+            ];
         }
+
+        // Tool schemas for LLM consumption
+        pub static TOOL_SCHEMAS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
+            $(
+                ToolSchema {
+                    name: concat!(stringify!($toolbelt_type), "::", $name),
+                    description: $desc,
+                    parameters: vec![
+                        $(
+                            ParameterSchema {
+                                name: $param_name,
+                                type_name: $param_type,
+                                description: $param_desc,
+                                required: true,
+                            }
+                        ),*
+                    ],
+                }
+            ),*
+        ]);
     };
 }

@@ -1,3 +1,1 @@
-mod file_smith;
-
-pub use file_smith::FileSmith;
+pub mod file_smith;

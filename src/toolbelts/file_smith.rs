@@ -1,6 +1,5 @@
-// filesmith.rs
 use crate::register_toolbelt;
-use crate::traits::{ParameterSchema, ToolSchema, ToolBelt, ToolChest};
+use crate::traits::{ParameterSchema, ToolSchema};
 use anyhow::Result;
 use serde_json::json;
 use std::fs;
@@ -10,13 +9,11 @@ pub struct FileSmith {
     directory: PathBuf,
 }
 
-impl FileSmith {
-    pub fn new(directory: Option<&str>) -> Self {
-        let base_directory = match directory {
-            Some(directory) => PathBuf::from(directory),
-            None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        };
-        Self { directory: base_directory }
+impl Default for FileSmith {
+    fn default() -> Self {
+        Self {
+            directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
     }
 }
 
@@ -115,10 +112,6 @@ register_toolbelt! {
             }
         }
     }
-}
-
-inventory::submit! {
-    ToolChest(|| Box::new(FileSmith::new(None)))
 }
 
 impl FileSmith {
