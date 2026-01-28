@@ -4,6 +4,7 @@ use std::io::{self, Write};
 
 mod traits;
 mod toolbelts;
+mod registry;
 mod artificer;
 
 use artificer::Artificer;
@@ -17,7 +18,7 @@ pub struct Message {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let artificer = Artificer::new();
+    let artificer = Artificer;
     let mut messages = vec![Message {
         role: "system".to_string(),
         content: Some(artificer.system_prompt().to_string()),

@@ -1,10 +1,8 @@
 use reqwest::Client;
 
-use crate::traits::{Agent, ToolBelt, ToolCaller, ToolChest};
+use crate::traits::{Agent, ToolCaller};
 
-pub struct Artificer {
-    toolbelts: Vec<Box<dyn ToolBelt + Send + Sync>>,
-}
+pub struct Artificer;
 
 impl Agent for Artificer {
     fn ollama_url(&self) -> &'static str { "http://localhost:11435/api/chat"  /* P40 (GPU 1) */ }
@@ -13,18 +11,4 @@ impl Agent for Artificer {
     fn system_prompt(&self) -> &'static str { "You are a helpful AI assistant" }
 }
 
-impl ToolCaller for Artificer {
-    fn toolbelts(&self) -> &[Box<dyn ToolBelt + Send + Sync>] {
-        &self.toolbelts
-    }
-}
-
-impl Artificer {
-    pub fn new() -> Artificer {
-        let toolbelts = inventory::iter::<ToolChest>
-            .into_iter()
-            .map(|chest| chest.0())
-            .collect();
-        Artificer { toolbelts }
-    }
-}
+impl ToolCaller for Artificer {}

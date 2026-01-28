@@ -1,7 +1,7 @@
 mod agent;
-mod tool_caller;
 mod toolbelt;
+mod tool_caller;
 
 pub use agent::Agent;
-pub use tool_caller::{Tool, ToolCall, ToolCaller};
-pub use toolbelt::{ParameterSchema, ToolSchema, ToolBelt, ToolChest};
+pub use toolbelt::{ParameterSchema, ToolSchema, ToolHandler};
+pub use tool_caller::ToolCaller;
