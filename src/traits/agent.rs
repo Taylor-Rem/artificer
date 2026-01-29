@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use anyhow::Result;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::Message;
 use super::Tool;
@@ -54,7 +54,7 @@ pub trait Agent: Send + Sync {
     fn ollama_url(&self) -> &'static str;
     fn model(&self) -> &'static str;
     fn client(&self) -> Client;
-    fn system_prompt(&self) -> &'static str;
+    fn system_prompt(&self) -> String;
 
     async fn make_request(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>) -> Result<ResponseMessage> {
         let request = ChatRequest {

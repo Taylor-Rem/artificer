@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::toolbelts::file_smith;
+use crate::toolbelts::{file_smith, archivist};
 use crate::traits::{ToolSchema, Tool};
 
 type Handler = fn(&Value) -> Result<String>;
@@ -15,6 +15,9 @@ static TOOL_REGISTRY: Lazy<HashMap<&'static str, Handler>> = Lazy::new(|| {
     for (name, handler) in file_smith::TOOL_ENTRIES {
         map.insert(*name, *handler);
     }
+    for (name, handler) in archivist::TOOL_ENTRIES {
+        map.insert(*name, *handler);
+    }
 
     map
 });
@@ -24,6 +27,7 @@ static TOOL_SCHEMAS: Lazy<Vec<ToolSchema>> = Lazy::new(|| {
 
     // Collect schemas from all toolbelts
     schemas.extend(file_smith::TOOL_SCHEMAS.iter().cloned());
+    schemas.extend(archivist::TOOL_SCHEMAS.iter().cloned());
 
     schemas
 });
