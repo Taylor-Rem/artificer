@@ -1,131 +1,166 @@
 use crate::register_toolbelt;
 use crate::traits::{ParameterSchema, ToolSchema};
 use anyhow::Result;
-use db::MiniDB;
+use db::{Database, DataType, Value, Row};
+use db::TableBuilder;
 use serde_json::json;
 use std::sync::Mutex;
 
 pub struct Archivist {
-    db: Mutex<MiniDB>,
+    db: Mutex<Database>,
 }
 
 impl Default for Archivist {
     fn default() -> Self {
-        let db_path = dirs::data_local_dir()
+        let db_path = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("artificer")
-            .join("preferences.db");
+            .join(".artificer")
+            .join("memory.db");
 
-        // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let db = MiniDB::open(db_path.to_str().unwrap_or("preferences.db"))
-            .expect("Failed to open preferences database");
+        let mut db = if db_path.exists() {
+            Database::open(&db_path).expect("Failed to open database")
+        } else {
+            Database::create(&db_path).expect("Failed to create database")
+        };
 
+        // Create conversation table with title and location
+        if db.get_schema("conversation").is_none() {
+            let schema = TableBuilder::new("conversation")
+                .column_not_null("conversation_id", DataType::Int64)
+                .column_not_null("title", DataType::Text)
+                .column("location", DataType::Text)
+                .primary_key(&["conversation_id"])
+                .build();
 
+            db.create_table(schema).expect("Failed to create conversation table");
+        }
 
-        Self { db: Mutex::new(db) }
+        Self {
+            db: Mutex::new(db),
+        }
     }
 }
 
 register_toolbelt! {
     Archivist {
-        description: "Tool for storing and retrieving user chat history and preferences",
+        description: "Tool for managing chat history, user memory, and preferences",
         tools: {
-            "set_preference" => set_preference {
-                description: "Stores a user preference. The value can be any string (JSON recommended for complex data).",
+            "create_conversation" => create_conversation {
+                description: "Creates a new conversation with a unique ID and title",
                 params: [
-                    "key": "string" => "The preference key (e.g., 'theme', 'language')",
-                    "value": "string" => "The preference value to store"
+                    "conversation_id": "integer" => "Unique conversation ID",
+                    "title": "string" => "Conversation title",
+                    "location": "string" => "Directory path where conversation started"
                 ]
             },
-            "get_preference" => get_preference {
-                description: "Retrieves a stored user preference by key. Returns null if not found.",
-                params: ["key": "string" => "The preference key to retrieve"]
-            },
-            "delete_preference" => delete_preference {
-                description: "Deletes a stored user preference by key.",
-                params: ["key": "string" => "The preference key to delete"]
-            },
-            "list_preferences" => list_preferences {
-                description: "Lists all stored preference keys.",
+            "list_conversations" => list_conversations {
+                description: "Lists all conversations with their IDs, titles, and locations",
                 params: []
+            },
+            "retrieve_conversation" => retrieve_conversation {
+                description: "Retrieves a conversation by its title",
+                params: ["title": "string" => "Title of the conversation to retrieve"]
             },
         }
     }
 }
 
 impl Archivist {
-    fn set_preference(&self, args: &serde_json::Value) -> Result<String> {
-        let key = args["key"].as_str().unwrap_or("");
-        let value = args["value"].as_str().unwrap_or("");
-
-        if key.is_empty() {
-            return Ok("Error: key cannot be empty".to_string());
-        }
-
-        let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match db.insert(key, value) {
-            Ok(_) => Ok(format!("Successfully stored preference '{}'", key)),
-            Err(e) => Ok(format!("Error storing preference: {}", e)),
+    fn value_to_json(value: &Value) -> serde_json::Value {
+        match value {
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(b) => json!(b),
+            Value::Int32(n) => json!(n),
+            Value::Int64(n) => json!(n),
+            Value::Float64(f) => json!(f),
+            Value::Text(s) => json!(s),
+            Value::Blob(b) => json!(format!("<blob {} bytes>", b.len())),
+            Value::Timestamp(ts) => json!(ts),
         }
     }
 
-    fn get_preference(&self, args: &serde_json::Value) -> Result<String> {
-        let key = args["key"].as_str().unwrap_or("");
+    fn create_conversation(&self, args: &serde_json::Value) -> Result<String> {
+        let conversation_id = args["conversation_id"].as_i64().unwrap_or(0);
+        let title = args["title"].as_str().unwrap_or("");
+        let location = args["location"].as_str().unwrap_or("");
 
-        if key.is_empty() {
-            return Ok("Error: key cannot be empty".to_string());
+        if title.is_empty() {
+            return Ok("Error: title cannot be empty".to_string());
         }
 
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match db.get(key) {
-            Ok(Some(value)) => {
-                let value_str = String::from_utf8_lossy(&value);
-                Ok(json!({
-                    "key": key,
-                    "value": value_str
-                }).to_string())
-            }
-            Ok(None) => Ok(json!({
-                "key": key,
-                "value": null
+        let row = Row::new(vec![
+            Value::Int64(conversation_id),
+            Value::Text(title.to_string()),
+            Value::Text(location.to_string()),
+        ]);
+
+        let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        match db.insert("conversation", row) {
+            Ok(_) => Ok(json!({
+                "success": true,
+                "conversation_id": conversation_id,
+                "title": title
             }).to_string()),
-            Err(e) => Ok(format!("Error retrieving preference: {}", e)),
+            Err(e) => Ok(format!("Error creating conversation: {}", e)),
         }
     }
 
-    fn delete_preference(&self, args: &serde_json::Value) -> Result<String> {
-        let key = args["key"].as_str().unwrap_or("");
+    fn list_conversations(&self, _args: &serde_json::Value) -> Result<String> {
+        let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
 
-        if key.is_empty() {
-            return Ok("Error: key cannot be empty".to_string());
+        match db.scan("conversation") {
+            Ok(rows) => {
+                let conversations: Vec<_> = rows.iter().map(|row| {
+                    json!({
+                        "conversation_id": Self::value_to_json(&row.values[0]),
+                        "title": Self::value_to_json(&row.values[1]),
+                        "location": Self::value_to_json(&row.values[2])
+                    })
+                }).collect();
+
+                Ok(json!({
+                    "conversations": conversations,
+                    "count": conversations.len()
+                }).to_string())
+            }
+            Err(e) => Ok(format!("Error listing conversations: {}", e)),
+        }
+    }
+
+    fn retrieve_conversation(&self, args: &serde_json::Value) -> Result<String> {
+        let title = args["title"].as_str().unwrap_or("");
+
+        if title.is_empty() {
+            return Ok("Error: title cannot be empty".to_string());
         }
 
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match db.remove(key) {
-            Ok(true) => Ok(format!("Successfully deleted preference '{}'", key)),
-            Ok(false) => Ok(format!("Preference '{}' not found", key)),
-            Err(e) => Ok(format!("Error deleting preference: {}", e)),
-        }
-    }
 
-    fn list_preferences(&self, _args: &serde_json::Value) -> Result<String> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match db.keys() {
-            Ok(keys) => {
-                let key_strings: Vec<String> = keys
-                    .iter()
-                    .map(|k| String::from_utf8_lossy(k).to_string())
-                    .collect();
+        // Note: This does a full table scan. Once we add index support to the DB,
+        // we should create an index on the title column for efficient lookups.
+        match db.scan("conversation") {
+            Ok(rows) => {
+                for row in rows {
+                    if let Value::Text(row_title) = &row.values[1] {
+                        if row_title == title {
+                            return Ok(json!({
+                                "conversation_id": Self::value_to_json(&row.values[0]),
+                                "title": Self::value_to_json(&row.values[1]),
+                                "location": Self::value_to_json(&row.values[2])
+                            }).to_string());
+                        }
+                    }
+                }
                 Ok(json!({
-                    "keys": key_strings,
-                    "count": key_strings.len()
+                    "error": "Conversation not found",
+                    "title": title
                 }).to_string())
             }
-            Err(e) => Ok(format!("Error listing preferences: {}", e)),
+            Err(e) => Ok(format!("Error retrieving conversation: {}", e)),
         }
     }
 }
