@@ -1,8 +1,9 @@
 use crate::register_toolbelt;
 use crate::traits::{ParameterSchema, ToolSchema};
 use anyhow::Result;
-use db::{Database, DataType, Value, Row};
+use db::{Database, DataType, Value};
 use db::TableBuilder;
+use db::query_builder::{QueryBuilder, QueryResult};
 use serde_json::json;
 use std::sync::Mutex;
 
@@ -14,7 +15,8 @@ impl Default for Archivist {
     fn default() -> Self {
         let db_path = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".artificer")
+            .join("RustroverProjects")
+            .join("artificer")
             .join("memory.db");
 
         if let Some(parent) = db_path.parent() {
@@ -26,26 +28,42 @@ impl Default for Archivist {
         } else {
             Database::create(&db_path).expect("Failed to create database")
         };
-
-        // NEW: Create conversation table with auto-increment ID
+        // conversations table
         if db.get_schema("conversation").is_none() {
             let schema = TableBuilder::new("conversation")
-                .column_auto_increment("conversation_id", DataType::Int64)  // AUTO-INCREMENT!
+                .column_auto_increment("id", DataType::UInt64)
                 .column_not_null("title", DataType::Text)
                 .column("location", DataType::Text)
-                .primary_key(&["conversation_id"])
+                .primary_key(&["id"])
                 .build();
 
             db.create_table(schema).expect("Failed to create conversation table");
         }
-
-        // Create index on title column for efficient lookups
         if db.get_schema("conversation")
             .and_then(|s| s.get_index("idx_title"))
             .is_none()
         {
             db.create_index("conversation", "idx_title", &["title"], false)
                 .expect("Failed to create title index");
+        }
+        // messages table
+        if db.get_schema("message").is_none() {
+            let schema = TableBuilder::new("message")
+                .column_auto_increment("id", DataType::UInt64)
+                .column("conversation_id", DataType::UInt64)
+                .column_not_null("role", DataType::Text)
+                .column_not_null("message", DataType::Text)
+                .column_not_null("order", DataType::UInt32)
+                .primary_key(&["id"])
+                .build();
+            db.create_table(schema).expect("Failed to create message table");
+        }
+        if db.get_schema("message")
+            .and_then(|s| s.get_index("conversation_id"))
+            .is_none()
+        {
+            db.create_index("message", "idx_conversation_id", &["conversation_id"], false)
+                    .expect("Failed to create conversation_id index");
         }
 
         Self {
@@ -58,13 +76,6 @@ register_toolbelt! {
     Archivist {
         description: "Tool for managing chat history, user memory, and preferences",
         tools: {
-            "create_conversation" => create_conversation {
-                description: "Creates a new conversation with auto-generated ID",
-                params: [
-                    "title": "string" => "Conversation title",
-                    "location": "string" => "Directory path where conversation started"
-                ]
-            },
             "list_conversations" => list_conversations {
                 description: "Lists all conversations with their IDs, titles, and locations",
                 params: []
@@ -82,6 +93,8 @@ impl Archivist {
         match value {
             Value::Null => serde_json::Value::Null,
             Value::Bool(b) => json!(b),
+            Value::UInt32(n) => json!(n),
+            Value::UInt64(n) => json!(n),
             Value::Int32(n) => json!(n),
             Value::Int64(n) => json!(n),
             Value::Float64(f) => json!(f),
@@ -91,38 +104,54 @@ impl Archivist {
         }
     }
 
-    // NEW: Simplified - no need to pass conversation_id!
-    fn create_conversation(&self, args: &serde_json::Value) -> Result<String> {
-        let title = args["title"].as_str().unwrap_or("");
-        let location = args["location"].as_str().unwrap_or("");
-
+    pub fn create_conversation(&self, title: &str, location: &str) -> Result<u64> {
         if title.is_empty() {
-            return Ok("Error: title cannot be empty".to_string());
+            return Err(anyhow::anyhow!("title cannot be empty"));
         }
-
-        // NEW: Use Value::Null for auto-increment column
-        let row = Row::new(vec![
-            Value::Null,  // conversation_id will be auto-generated
-            Value::Text(title.to_string()),
-            Value::Text(location.to_string()),
-        ]);
 
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match db.insert("conversation", row) {
-            Ok(_) => {
-                // Get the auto-generated ID by retrieving the schema
-                let schema = db.get_schema("conversation").unwrap();
-                let generated_id = schema.auto_increment - 1;  // Last used ID
+        QueryBuilder::new(&mut db)
+            .from("conversation")
+            .values(vec![
+                Value::Null,
+                Value::Text(title.to_string()),
+                Value::Text(location.to_string()),
+            ])
+            .insert()?;
 
+        let schema = db.get_schema("conversation")
+            .ok_or_else(|| anyhow::anyhow!("conversation schema not found"))?;
+
+        Ok(schema.auto_increment)
+    }
+    pub fn create_message(&self, conversation_id: u64, role: &str, message: &str, order: &u32) -> Result<String> {
+        let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        match QueryBuilder::new(&mut db)
+            .from("message")
+            .values(vec![
+                Value::Null,
+                Value::UInt64(conversation_id),
+                Value::Text(role.to_string()),
+                Value::Text(message.to_string()),
+                Value::UInt32(*order),
+            ])
+            .insert()
+        {
+            Ok(_) => {
+                let schema = db.get_schema("message").unwrap();
                 Ok(json!({
                     "success": true,
-                    "conversation_id": generated_id,
-                    "title": title
+                    "conversation_id": conversation_id,
+                    "message_id": schema.auto_increment,
+                    "role": role,
+                    "message": message
                 }).to_string())
             }
-            Err(e) => Ok(format!("Error creating conversation: {}", e)),
+            Err(e) => Ok(format!("Error creating message: {}", e)),
         }
     }
+
+
 
     fn list_conversations(&self, _args: &serde_json::Value) -> Result<String> {
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
@@ -155,23 +184,53 @@ impl Archivist {
 
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
 
-        // Use index lookup for efficient retrieval by title
-        match db.find_by_index("conversation", "idx_title", &[Value::Text(title.to_string())]) {
-            Ok(rows) => {
+        // Find the conversation by title
+        let result = QueryBuilder::new(&mut db)
+            .from("conversation")
+            .where_eq("title", Value::Text(title.to_string()))
+            .limit(1)
+            .execute();
+
+        match result {
+            Ok(QueryResult::Simple(rows)) => {
                 if let Some(row) = rows.first() {
+                    let conv_id = row.values[0].clone();
+
+                    // Fetch messages for this conversation
+                    let messages_result = QueryBuilder::new(&mut db)
+                        .from("message")
+                        .where_eq("conversation_id", conv_id)
+                        .execute();
+
+                    let messages = match messages_result {
+                        Ok(QueryResult::Simple(msg_rows)) => {
+                            msg_rows.iter().map(|msg| {
+                                json!({
+                                  "message_id": Self::value_to_json(&msg.values[0]),
+                                  "role": Self::value_to_json(&msg.values[2]),
+                                  "message": Self::value_to_json(&msg.values[3]),
+                              })
+                            }).collect::<Vec<_>>()
+                        }
+                        _ => vec![],
+                    };
+
                     Ok(json!({
-                        "conversation_id": Self::value_to_json(&row.values[0]),
-                        "title": Self::value_to_json(&row.values[1]),
-                        "location": Self::value_to_json(&row.values[2])
-                    }).to_string())
+                      "conversation_id": Self::value_to_json(&row.values[0]),
+                      "title": Self::value_to_json(&row.values[1]),
+                      "location": Self::value_to_json(&row.values[2]),
+                      "messages": messages,
+                  }).to_string())
                 } else {
                     Ok(json!({
-                        "error": "Conversation not found",
-                        "title": title
-                    }).to_string())
+                      "error": "Conversation not found",
+                      "title": title
+                  }).to_string())
                 }
             }
+            Ok(_) => Ok("Error: unexpected query result type".to_string()),
             Err(e) => Ok(format!("Error retrieving conversation: {}", e)),
         }
     }
+
 }
