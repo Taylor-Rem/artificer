@@ -1,14 +1,16 @@
 use crate::register_toolbelt;
 use crate::traits::{ParameterSchema, ToolSchema};
+use crate::agents::helper::Helper;
+use crate::Message;
 use anyhow::Result;
 use db::{Database, DataType, Value};
 use db::TableBuilder;
 use db::query_builder::{QueryBuilder, QueryResult};
 use serde_json::json;
-use std::sync::Mutex;
-
+use std::sync::{Arc, Mutex};
+#[derive(Clone)]
 pub struct Archivist {
-    db: Mutex<Database>,
+    db: Arc<Mutex<Database>>,
 }
 
 impl Default for Archivist {
@@ -32,7 +34,7 @@ impl Default for Archivist {
         if db.get_schema("conversation").is_none() {
             let schema = TableBuilder::new("conversation")
                 .column_auto_increment("id", DataType::UInt64)
-                .column_not_null("title", DataType::Text)
+                .column("title", DataType::Text)
                 .column_not_null("location", DataType::Text)
                 .column_not_null("created", DataType::Timestamp)
                 .column_not_null("last accessed", DataType::Timestamp)
@@ -70,7 +72,7 @@ impl Default for Archivist {
         }
 
         Self {
-            db: Mutex::new(db),
+            db: Arc::new(Mutex::new(db)),
         }
     }
 }
@@ -107,18 +109,140 @@ impl Archivist {
         }
     }
 
-    pub fn create_conversation(&self, title: &str, location: &str) -> Result<u64> {
-        if title.is_empty() {
-            return Err(anyhow::anyhow!("title cannot be empty"));
+     pub async fn initialize_conversation(&self, user_message: Message, location: &str) -> Result<u64> {
+        let conversation_id = self.create_conversation(location.to_string())?;
+         let archivist_clone = self.clone();
+         tokio::spawn(async move {
+             archivist_clone.create_title(conversation_id, user_message).await;
+         });
+         Ok(conversation_id)
+    }
+
+    async fn create_title(&self, conversation_id: u64, user_message: Message) {
+        let helper = Helper;
+        let mut attempts = 0;
+        let max_attempts = 3;
+        let mut failed_titles: Vec<String> = Vec::new();
+        let mut all_null = true;
+
+        while attempts < max_attempts {
+            attempts += 1;
+
+            // Try to get a title from the helper
+            match helper.create_title(&user_message).await {
+                Ok(raw_title) if !raw_title.is_empty() => {
+                    all_null = false;
+
+                    // Sanitize the title
+                    let sanitized = self.sanitize_title(&raw_title);
+
+                    // Check if it already exists
+                    if !self.title_exists(&sanitized) {
+                        // Success! Update the database
+                        if let Ok(mut db) = self.db.lock() {
+                            let _ = QueryBuilder::new(&mut db)
+                                .from("conversation")
+                                .set("title", Value::Text(sanitized))
+                                .where_eq("id", Value::UInt64(conversation_id))
+                                .update();
+                        }
+                        return;
+                    }
+
+                    // Title exists, save it for potential reuse
+                    failed_titles.push(sanitized);
+                }
+                _ => {
+                    // Null or error, continue loop
+                }
+            }
         }
 
+        // All attempts failed, determine fallback strategy
+        let final_title = if all_null {
+            // All responses were null/empty - create random hash
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut hasher = DefaultHasher::new();
+            conversation_id.hash(&mut hasher);
+            std::time::SystemTime::now().hash(&mut hasher);
+            format!("conversation_{:x}", hasher.finish())
+        } else {
+            // All titles matched existing ones - append number
+            let base_title = failed_titles.first().unwrap();
+            self.find_available_title(base_title)
+        };
+
+        // Update with final title
+        if let Ok(mut db) = self.db.lock() {
+            let _ = QueryBuilder::new(&mut db)
+                .from("conversation")
+                .set("title", Value::Text(final_title))
+                .where_eq("id", Value::UInt64(conversation_id))
+                .update();
+        }
+    }
+
+    fn sanitize_title(&self, title: &str) -> String {
+        title.chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' => c,
+                ' ' | '-' | '.' | '/' | '\\' => '_',
+                _ => '_', // Replace all other special characters
+            })
+            .collect::<String>()
+            .split('_')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+
+    fn title_exists(&self, title: &str) -> bool {
+        if let Ok(mut db) = self.db.lock() {
+            if let Ok(QueryResult::Simple(rows)) = QueryBuilder::new(&mut db)
+                .from("conversation")
+                .where_eq("title", Value::Text(title.to_string()))
+                .limit(1)
+                .execute()
+            {
+                return !rows.is_empty();
+            }
+        }
+        false
+    }
+
+    fn find_available_title(&self, base: &str) -> String {
+        let mut counter = 1;
+        loop {
+            let candidate = format!("{}_{}", base, counter);
+            if !self.title_exists(&candidate) {
+                return candidate;
+            }
+            counter += 1;
+
+            // Safety: prevent infinite loop
+            if counter > 1000 {
+                return format!("{}_{}", base, uuid::Uuid::new_v4().to_string());
+            }
+        }
+    }
+
+    pub fn create_conversation(&self, location: String) -> Result<u64> {
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
         QueryBuilder::new(&mut db)
             .from("conversation")
             .values(vec![
                 Value::Null,
-                Value::Text(title.to_string()),
+                Value::Null,
                 Value::Text(location.to_string()),
+                Value::Timestamp(now),
+                Value::Timestamp(now),
             ])
             .insert()?;
 
@@ -127,26 +251,24 @@ impl Archivist {
 
         Ok(schema.auto_increment)
     }
-    pub fn create_message(&self, conversation_id: u64, role: &str, message: &str, order: &u32) -> Result<String> {
+    pub fn create_message(&self, conversation_id: Option<u64>, role: &str, message: &str, message_count: &mut u32) -> Result<()> {
+        let conv_id = conversation_id.ok_or_else(|| anyhow::anyhow!("No conversation ID"))?;
+
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
         QueryBuilder::new(&mut db)
             .from("message")
             .values(vec![
                 Value::Null,
-                Value::UInt64(conversation_id),
+                Value::UInt64(conv_id),
                 Value::Text(role.to_string()),
                 Value::Text(message.to_string()),
-                Value::UInt32(*order),
+                Value::UInt32(*message_count),
             ])
             .insert()?;
 
-        let schema = db.get_schema("message")
-            .ok_or_else(|| anyhow::anyhow!("message schema not found"))?;
-
-        Ok("great!".to_string())
+        *message_count += 1;
+        Ok(())
     }
-
-
 
     fn list_conversations(&self, _args: &serde_json::Value) -> Result<String> {
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
@@ -227,5 +349,4 @@ impl Archivist {
             Err(e) => Ok(format!("Error retrieving conversation: {}", e)),
         }
     }
-
 }
