@@ -33,7 +33,9 @@ impl Default for Archivist {
             let schema = TableBuilder::new("conversation")
                 .column_auto_increment("id", DataType::UInt64)
                 .column_not_null("title", DataType::Text)
-                .column("location", DataType::Text)
+                .column_not_null("location", DataType::Text)
+                .column_not_null("created", DataType::Timestamp)
+                .column_not_null("last accessed", DataType::Timestamp)
                 .primary_key(&["id"])
                 .build();
 
@@ -54,6 +56,7 @@ impl Default for Archivist {
                 .column_not_null("role", DataType::Text)
                 .column_not_null("message", DataType::Text)
                 .column_not_null("order", DataType::UInt32)
+                .column_not_null("created", DataType::Timestamp)
                 .primary_key(&["id"])
                 .build();
             db.create_table(schema).expect("Failed to create message table");
@@ -126,7 +129,7 @@ impl Archivist {
     }
     pub fn create_message(&self, conversation_id: u64, role: &str, message: &str, order: &u32) -> Result<String> {
         let mut db = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        match QueryBuilder::new(&mut db)
+        QueryBuilder::new(&mut db)
             .from("message")
             .values(vec![
                 Value::Null,
@@ -135,20 +138,12 @@ impl Archivist {
                 Value::Text(message.to_string()),
                 Value::UInt32(*order),
             ])
-            .insert()
-        {
-            Ok(_) => {
-                let schema = db.get_schema("message").unwrap();
-                Ok(json!({
-                    "success": true,
-                    "conversation_id": conversation_id,
-                    "message_id": schema.auto_increment,
-                    "role": role,
-                    "message": message
-                }).to_string())
-            }
-            Err(e) => Ok(format!("Error creating message: {}", e)),
-        }
+            .insert()?;
+
+        let schema = db.get_schema("message")
+            .ok_or_else(|| anyhow::anyhow!("message schema not found"))?;
+
+        Ok("great!".to_string())
     }
 
 
