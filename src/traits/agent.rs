@@ -56,6 +56,12 @@ pub trait Agent: Send + Sync {
     fn client(&self) -> Client;
     fn system_prompt(&self) -> &'static str;
 
+    // async fn make_persistent_request(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>, mut tries: Option<u32>) -> Result<ResponseMessage> {
+    //     loop {
+    //
+    //     }
+    // }
+
     async fn make_request(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>) -> Result<ResponseMessage> {
         let request = ChatRequest {
             model: self.model().to_string(),

@@ -8,7 +8,7 @@ mod toolbelts;
 mod registry;
 mod agents;
 
-use agents::{artificer::Artificer, titler::Titler};
+use agents::{artificer::Artificer, helper::Helper};
 use toolbelts::archivist::Archivist;
 use crate::traits::{Agent, ToolCall, ToolCaller};
 
@@ -24,7 +24,6 @@ pub struct Message {
 #[tokio::main]
 async fn main() -> Result<()> {
     let artificer = Artificer;
-    let titler = Titler;
     let archivist = Archivist::default();
     let tools = registry::get_tools();
 
@@ -33,16 +32,14 @@ async fn main() -> Result<()> {
         content: Some(artificer.system_prompt().to_string()),
         tool_calls: None,
     }];
+    let mut conversation_id: Option<u64> = None;
+    let mut first_loop = true;
 
     println!("Artificer is ready. Type 'quit' to exit.\n");
     println!("Available tools: {}", tools.iter().map(|t| t.function.name.as_str()).collect::<Vec<_>>().join(", "));
     println!();
 
-    let mut first_loop = true;
-    let mut title = "".to_string();
-    let mut conversation_id: Option<u64> = None;
     let mut message_count = 0;
-
     loop {
         let input = wait_for_user_input()?;
         if input.eq_ignore_ascii_case("quit") {
@@ -61,22 +58,20 @@ async fn main() -> Result<()> {
 
         if first_loop {
             first_loop = false;
-            let titler_messages = vec![
-                Message {
-                    role: "system".to_string(),
-                    content: Some(titler.system_prompt().to_string()),
-                    tool_calls: None,
-                },
-                user_message.clone()
-            ];
-            let title_response = titler.make_request(&titler_messages, None).await?;
-            title = title_response.content.unwrap_or_else(|| "Untitled".to_string());
-            conversation_id = Some(archivist.create_conversation(&title, "")?);
-            archivist.create_message(conversation_id.unwrap(), "system", &messages[0].content.as_deref().unwrap(), &message_count)?;
-            message_count += 1;
+            match archivist.initialize_conversation(user_message.clone(), "").await {
+                Ok(id) => conversation_id = Some(id),
+                Err(e) => {
+                    eprintln!("⚠️  Warning: Failed to create conversation - history will not be saved.");
+                    eprintln!("   Error: {}", e);
+                }
+            }
         }
-        archivist.create_message(conversation_id.unwrap(), "user", &input, &message_count)?;
-        message_count += 1;
+        if let Err(e) = archivist.create_message(conversation_id, "user", &input, &mut message_count) {
+            if conversation_id.is_some() {
+                eprintln!("⚠️  Warning: Failed to save user message to history.");
+                eprintln!("   Error: {}", e);
+            }
+        }
         messages.push(user_message);
 
         // Chat loop - handles tool calls until we get a final response
@@ -113,9 +108,12 @@ async fn main() -> Result<()> {
             } else {
                 // No tool calls - print response and break inner loop
                 let content = response.content.unwrap_or_default();
-                archivist.create_message(conversation_id.unwrap(), "assistant", &content, &message_count)?;
-                message_count += 1;
-
+                if let Err(e) = archivist.create_message(conversation_id, "assistant", &content, &mut message_count) {
+                    if conversation_id.is_some() {
+                        eprintln!("⚠️  Warning: Failed to save assistant message to history.");
+                        eprintln!("   Error: {}", e);
+                    }
+                }
                 println!("\nArtificer: {}\n", content);
                 break;
             }
