@@ -50,7 +50,5 @@ impl ToolSchema {
 }
 
 pub trait ToolCaller {
-    fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String> {
-        crate::registry::use_tool(tool_name, args)
-    }
+    fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String>;
 }
