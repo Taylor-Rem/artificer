@@ -1,25 +1,15 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self, Write};
 
-mod traits;
 mod toolbelts;
 mod registry;
 mod agents;
 
-use agents::{artificer::Artificer, helper::Helper};
+use agents::artificer::Artificer;
 use toolbelts::archivist::Archivist;
-use crate::traits::{Agent, ToolCall, ToolCaller};
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct Message {
-    pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
+use shared::Message;
+use shared::traits::{Agent, ToolCaller};
 
 #[tokio::main]
 async fn main() -> Result<()> {

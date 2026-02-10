@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::toolbelts::{archivist, file_smith};
-use crate::traits::{ToolSchema, Tool};
+use shared::traits::{ToolSchema, Tool};
 
 type Handler = fn(&Value) -> Result<String>;
 

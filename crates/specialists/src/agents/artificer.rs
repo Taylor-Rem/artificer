@@ -1,6 +1,8 @@
+use anyhow::Result;
 use reqwest::Client;
+use serde_json::Value;
 
-use crate::traits::{Agent, ToolCaller};
+use shared::traits::{Agent, ToolCaller};
 
 pub struct Artificer;
 
@@ -11,4 +13,8 @@ impl Agent for Artificer {
     fn system_prompt(&self) -> &'static str { "You are a helpful AI assistant" }
 }
 
-impl ToolCaller for Artificer {}
+impl ToolCaller for Artificer {
+    fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String> {
+        crate::registry::use_tool(tool_name, args)
+    }
+}
