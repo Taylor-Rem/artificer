@@ -1,8 +1,8 @@
 use anyhow::Result;
 use reqwest::Client;
 
-use shared::traits::Agent;
-use shared::Message;
+use crate::traits::Agent;
+use crate::Message;
 
 pub struct Helper;
 

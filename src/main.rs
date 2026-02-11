@@ -1,15 +1,27 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self, Write};
 
-mod toolbelts;
 mod registry;
 mod agents;
+pub mod toolbelts;
+pub mod traits;
+pub mod functionality;
+pub mod db;
 
 use agents::artificer::Artificer;
 use toolbelts::archivist::Archivist;
-use shared::Message;
-use shared::traits::{Agent, ToolCaller};
+use traits::{Agent, ToolCall, ToolCaller};
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct Message {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -51,14 +63,14 @@ async fn main() -> Result<()> {
             match archivist.initialize_conversation(user_message.clone(), "").await {
                 Ok(id) => conversation_id = Some(id),
                 Err(e) => {
-                    eprintln!("⚠️  Warning: Failed to create conversation - history will not be saved.");
+                    eprintln!("Warning: Failed to create conversation - history will not be saved.");
                     eprintln!("   Error: {}", e);
                 }
             }
         }
         if let Err(e) = archivist.create_message(conversation_id, "user", &input, &mut message_count) {
             if conversation_id.is_some() {
-                eprintln!("⚠️  Warning: Failed to save user message to history.");
+                eprintln!("Warning: Failed to save user message to history.");
                 eprintln!("   Error: {}", e);
             }
         }
@@ -100,7 +112,7 @@ async fn main() -> Result<()> {
                 let content = response.content.unwrap_or_default();
                 if let Err(e) = archivist.create_message(conversation_id, "assistant", &content, &mut message_count) {
                     if conversation_id.is_some() {
-                        eprintln!("⚠️  Warning: Failed to save assistant message to history.");
+                        eprintln!("Warning: Failed to save assistant message to history.");
                         eprintln!("   Error: {}", e);
                     }
                 }

@@ -1,5 +1,5 @@
-use shared::register_toolbelt;
-use shared::traits::{ParameterSchema, ToolSchema};
+use crate::register_toolbelt;
+use crate::traits::{ParameterSchema, ToolSchema};
 use anyhow::Result;
 use serde_json::json;
 use std::fs;
@@ -12,7 +12,7 @@ pub struct FileSmith {
 impl Default for FileSmith {
     fn default() -> Self {
         Self {
-            directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("../../../../../../../..")),
         }
     }
 }
