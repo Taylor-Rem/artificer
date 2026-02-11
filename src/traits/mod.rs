@@ -1,4 +1,2 @@
-mod tool_caller;
-
-pub use crate::schema::{Agent, ToolCall, Tool, ToolSchema, ParameterSchema, ToolHandler};
-pub use tool_caller::ToolCaller;
+pub use crate::schema::{Agent, ParameterSchema, Tool, ToolCall, ToolHandler, ToolSchema};
+pub use crate::schema::tool_caller::ToolCaller;
