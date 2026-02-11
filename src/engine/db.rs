@@ -71,6 +71,7 @@ impl Db {
             CREATE TABLE IF NOT EXISTS conversation (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
+                summary TEXT,
                 location TEXT NOT NULL,
                 created INTEGER NOT NULL,
                 last_accessed INTEGER NOT NULL

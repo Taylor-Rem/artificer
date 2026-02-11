@@ -13,8 +13,8 @@ use artificer::services::conversation::Conversation;
 #[tokio::main]
 async fn main() -> Result<()> {
     let artificer = Artificer;
-    let conversation_manager = Conversation::default();
-    let worker = Worker::new(2); // poll every 2 seconds
+    let conversation = Conversation::default();
+    let worker = Worker::new(2);
     tokio::spawn(async move {
         if let Err(e) = worker.run().await {
             eprintln!("Worker crashed: {}", e);
@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
     loop {
         let input = wait_for_user_input()?;
         if input.eq_ignore_ascii_case("quit") {
+            conversation.summarize(conversation_id.unwrap())?;
             println!("Goodbye!");
             break;
         }
@@ -53,7 +54,7 @@ async fn main() -> Result<()> {
 
         if first_loop {
             first_loop = false;
-            match conversation_manager.init_conversation(user_message.clone(), "").await {
+            match conversation.init(user_message.clone(), "").await {
                 Ok(id) => conversation_id = Some(id),
                 Err(e) => {
                     eprintln!("Warning: Failed to create conversation - history will not be saved.");
@@ -61,7 +62,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        if let Err(e) = conversation_manager.create_message(conversation_id, "user", &input, &mut message_count) {
+        if let Err(e) = conversation.create_message(conversation_id, "user", &input, &mut message_count) {
             if conversation_id.is_some() {
                 eprintln!("Warning: Failed to save user message to history.");
                 eprintln!("   Error: {}", e);
@@ -103,7 +104,7 @@ async fn main() -> Result<()> {
             } else {
                 // No tool calls - print response and break inner loop
                 let content = response.content.unwrap_or_default();
-                if let Err(e) = conversation_manager.create_message(conversation_id, "assistant", &content, &mut message_count) {
+                if let Err(e) = conversation.create_message(conversation_id, "assistant", &content, &mut message_count) {
                     if conversation_id.is_some() {
                         eprintln!("Warning: Failed to save assistant message to history.");
                         eprintln!("   Error: {}", e);
