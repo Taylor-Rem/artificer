@@ -15,7 +15,7 @@ impl Default for Conversation {
 }
 
 impl Conversation {
-    pub async fn init_conversation(&self, user_message: Message, location: &str) -> Result<u64> {
+    pub async fn init(&self, user_message: Message, location: &str) -> Result<u64> {
         let conversation_id = self.create_conversation(location.to_string())?;
         let _ = self.create_title(conversation_id, &user_message);
         Ok(conversation_id)
@@ -29,7 +29,7 @@ impl Conversation {
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO conversation (title, location, created, last_accessed) VALUES (NULL, ?1, ?2, ?3)",
+            "INSERT INTO conversation (location, created, last_accessed) VALUES (?1, ?2, ?3)",
             rusqlite::params![location, now, now],
         )?;
 
@@ -85,7 +85,7 @@ impl Conversation {
         self.create_job("create_title", &serde_json::json!({ "conversation_id": conversation_id }), Some(&context), 1)
     }
 
-    pub fn create_summary(&self, conversation_id: u64) -> Result<u64> {
+    pub fn summarize(&self, conversation_id: u64) -> Result<u64> {
         self.create_job("create_summary", &serde_json::json!({ "conversation_id": conversation_id }), None, 0)
     }
 }

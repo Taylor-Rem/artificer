@@ -144,6 +144,11 @@ impl Worker {
 
         let summary = self.helper.summarize(&text).await?;
 
+        self.db.execute(
+            "UPDATE conversation SET summary = ?1 WHERE id = ?2",
+            rusqlite::params![summary, conversation_id]
+        )?;
+
         Ok(summary)
     }
 
