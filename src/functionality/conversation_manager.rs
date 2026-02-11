@@ -1,0 +1,67 @@
+use anyhow::Result;
+use crate::Message;
+use crate::db::Db;
+
+struct ConversationManager {
+    db: Db
+}
+
+impl Default for ConversationManager {
+    fn default() -> Self {
+        Self {
+            db: Db::default()
+        }
+    }
+}
+
+impl ConversationManager {
+    pub async fn init_conversation(&self, user_message: Message, location: &str) -> Result<u64> {
+        let conversation_id = self.create_conversation(location.to_string())?;
+        Ok(conversation_id)
+    }
+
+    pub fn create_conversation(&self, location: String) -> Result<u64> {
+        let conn = self.db.lock()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO conversation (title, location, created, last_accessed) VALUES (NULL, ?1, ?2, ?3)",
+            rusqlite::params![location, now, now],
+        )?;
+
+        Ok(conn.last_insert_rowid() as u64)
+    }
+
+    pub fn create_message(&self, conversation_id: Option<u64>, role: &str, message: &str, message_count: &mut u32) -> Result<()> {
+        let conv_id = conversation_id.ok_or_else(|| anyhow::anyhow!("No conversation ID"))?;
+
+        let conn = self.db.lock()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO message (conversation_id, role, message, \"order\", created) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![conv_id as i64, role, message, *message_count as i64, now],
+        )?;
+
+        *message_count += 1;
+        Ok(())
+    }
+
+    async fn create_job(&self, _method: &str, _args: &serde_json::Value, _priority: i32) -> Result<u64> {
+        todo!()
+    }
+
+    async fn create_title(&self, _conversation_id: u64, _user_message: Message) {
+        todo!()
+    }
+
+    pub fn create_summary(&self, _conversation: Vec<Message>) {
+        todo!()
+    }
+}

@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::Client;
 use serde_json::Value;
 
-use shared::traits::{Agent, ToolCaller};
+use crate::traits::{Agent, ToolCaller};
 
 pub struct Artificer;
 
