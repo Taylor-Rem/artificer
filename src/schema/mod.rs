@@ -1,6 +1,7 @@
-pub mod agent;
 pub mod tool;
 pub mod macros;
+mod traits;
 
-pub use agent::{Agent, ToolCall, ChatRequest, ChatResponse, ResponseMessage};
-pub use tool::{Tool, ToolSchema, ParameterSchema, ToolHandler};
+pub use traits::agent::{Agent, ChatRequest, ChatResponse, ResponseMessage, ToolCall};
+pub use traits::tool_caller::ToolCaller;
+pub use tool::{ParameterSchema, Tool, ToolHandler, ToolSchema};

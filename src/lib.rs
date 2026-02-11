@@ -1,10 +1,8 @@
-pub mod core;
+pub mod engine;
 pub mod schema;
 pub mod services;
 pub mod agents;
 pub mod toolbelts;
-pub mod traits;
-
 use serde::{Deserialize, Serialize};
 use schema::ToolCall;
 

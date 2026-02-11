@@ -1,11 +1,17 @@
-use crate::core::db::Db;
+use crate::engine::db::Db;
 
-struct Title {
+pub struct Title {
     db: Db,
 }
 
+impl Default for Title {
+    fn default() -> Self {
+        Self { db: Db::default() }
+    }
+}
+
 impl Title {
-    fn sanitize_title(&self, title: &str) -> String {
+    pub fn sanitize_title(&self, title: &str) -> String {
         title.chars()
             .map(|c| match c {
                 'a'..='z' | 'A'..='Z' | '0'..='9' => c,
@@ -19,7 +25,7 @@ impl Title {
             .join("_")
     }
 
-    fn title_exists(&self, title: &str) -> bool {
+    pub fn title_exists(&self, title: &str) -> bool {
         if let Ok(conn) = self.db.lock() {
             let exists: bool = conn
                 .query_row(
@@ -33,7 +39,7 @@ impl Title {
         false
     }
 
-    fn find_available_title(&self, base: &str) -> String {
+    pub fn find_available_title(&self, base: &str) -> String {
         let mut counter = 1;
         loop {
             let candidate = format!("{}_{}", base, counter);

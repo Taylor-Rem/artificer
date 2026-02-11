@@ -1,7 +1,7 @@
 use anyhow::Result;
 use reqwest::Client;
 
-use crate::traits::Agent;
+use crate::schema::Agent;
 use crate::Message;
 
 pub struct Helper;
