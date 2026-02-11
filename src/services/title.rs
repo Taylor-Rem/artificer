@@ -1,4 +1,4 @@
-use crate::db::Db;
+use crate::core::db::Db;
 
 struct Title {
     db: Db,

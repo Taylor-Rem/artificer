@@ -15,6 +15,6 @@ impl Agent for Artificer {
 
 impl ToolCaller for Artificer {
     fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String> {
-        crate::registry::use_tool(tool_name, args)
+        crate::core::registry::use_tool(tool_name, args)
     }
 }

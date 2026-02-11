@@ -1,5 +1,5 @@
 use crate::register_toolbelt;
-use crate::traits::{ParameterSchema, ToolSchema};
+use crate::schema::{ParameterSchema, ToolSchema};
 use anyhow::Result;
 use serde_json::json;
 use std::fs;

@@ -1,24 +1,3 @@
-use anyhow::Result;
-use serde_json::Value;
-
-#[derive(Debug, Clone)]
-pub struct ToolSchema {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub parameters: Vec<ParameterSchema>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ParameterSchema {
-    pub name: &'static str,
-    pub type_name: &'static str,
-    pub description: &'static str,
-    pub required: bool,
-}
-
-/// Type alias for tool handler functions used in the registry
-pub type ToolHandler = fn(&Value) -> Result<String>;
-
 #[macro_export]
 macro_rules! register_toolbelt {
     (
@@ -50,7 +29,7 @@ macro_rules! register_toolbelt {
 
         // Tool entries for registry (namespaced: "TypeName::tool_name")
         paste::paste! {
-            pub static TOOL_ENTRIES: &[(&str, $crate::traits::ToolHandler)] = &[
+            pub static TOOL_ENTRIES: &[(&str, $crate::schema::ToolHandler)] = &[
                 $((concat!(stringify!($toolbelt_type), "::", $name), [<$method _handler>])),*
             ];
         }

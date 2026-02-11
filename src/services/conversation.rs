@@ -1,8 +1,8 @@
 use anyhow::Result;
 use crate::Message;
-use crate::db::Db;
+use crate::core::db::Db;
 
-struct ConversationManager {
+pub struct ConversationManager {
     db: Db
 }
 
@@ -53,8 +53,25 @@ impl ConversationManager {
         Ok(())
     }
 
-    async fn create_job(&self, _method: &str, _args: &serde_json::Value, _priority: i32) -> Result<u64> {
-        todo!()
+    pub fn create_job(&self, method: &str, arguments: &serde_json::Value, context: Option<&serde_json::Value>, priority: i32) -> Result<u64> {
+        let conn = self.db.lock()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO jobs (method, arguments, priority, status, created_at, context)
+             VALUES (?1, ?2, ?3, 'pending', ?4, ?5)",
+            rusqlite::params![
+                method,
+                arguments.to_string(),
+                priority,
+                now,
+                context.map(|c| c.to_string())
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid() as u64)
     }
 
     async fn create_title(&self, _conversation_id: u64, _user_message: Message) {
