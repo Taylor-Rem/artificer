@@ -17,7 +17,7 @@ impl Agent for Helper {
     fn ollama_url(&self) -> &'static str { "http://localhost:11434/api/chat" /* 3070 */ }
     fn model(&self) -> &'static str { "qwen2.5:32b-instruct-q5_K_M" }
     fn client(&self) -> Client { Client::new() }
-    fn system_prompt(&self) -> &'static str { "" } // Default unused for Helper
+    fn system_prompt(&self) -> &'static str { "" }
 }
 
 impl Helper {

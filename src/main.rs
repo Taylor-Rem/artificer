@@ -1,32 +1,25 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self, Write};
 
-mod registry;
-mod agents;
-pub mod toolbelts;
-pub mod traits;
-pub mod functionality;
-pub mod db;
-
-use agents::artificer::Artificer;
-use toolbelts::archivist::Archivist;
-use traits::{Agent, ToolCall, ToolCaller};
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct Message {
-    pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
+use artificer::Message;
+use artificer::core::registry;
+use artificer::core::worker::Worker;
+use artificer::schema::Agent;
+use artificer::traits::ToolCaller;
+use artificer::agents::artificer::Artificer;
+use artificer::services::conversation::ConversationManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let artificer = Artificer;
-    let archivist = Archivist::default();
+    let conversation_manager = ConversationManager::default();
+    let worker = Worker::new(2); // poll every 2 seconds
+    tokio::spawn(async move {
+        if let Err(e) = worker.run().await {
+            eprintln!("Worker crashed: {}", e);
+        }
+    });
     let tools = registry::get_tools();
 
     let mut messages = vec![Message {
@@ -60,7 +53,7 @@ async fn main() -> Result<()> {
 
         if first_loop {
             first_loop = false;
-            match archivist.initialize_conversation(user_message.clone(), "").await {
+            match conversation_manager.init_conversation(user_message.clone(), "").await {
                 Ok(id) => conversation_id = Some(id),
                 Err(e) => {
                     eprintln!("Warning: Failed to create conversation - history will not be saved.");
@@ -68,7 +61,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        if let Err(e) = archivist.create_message(conversation_id, "user", &input, &mut message_count) {
+        if let Err(e) = conversation_manager.create_message(conversation_id, "user", &input, &mut message_count) {
             if conversation_id.is_some() {
                 eprintln!("Warning: Failed to save user message to history.");
                 eprintln!("   Error: {}", e);
@@ -110,7 +103,7 @@ async fn main() -> Result<()> {
             } else {
                 // No tool calls - print response and break inner loop
                 let content = response.content.unwrap_or_default();
-                if let Err(e) = archivist.create_message(conversation_id, "assistant", &content, &mut message_count) {
+                if let Err(e) = conversation_manager.create_message(conversation_id, "assistant", &content, &mut message_count) {
                     if conversation_id.is_some() {
                         eprintln!("Warning: Failed to save assistant message to history.");
                         eprintln!("   Error: {}", e);

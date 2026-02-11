@@ -1,6 +1,6 @@
 use crate::register_toolbelt;
-use crate::traits::{ParameterSchema, ToolSchema};
-use crate::db::Db;
+use crate::schema::{ParameterSchema, ToolSchema};
+use crate::core::db::Db;
 use anyhow::Result;
 
 #[derive(Clone)]

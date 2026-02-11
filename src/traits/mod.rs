@@ -1,7 +1,4 @@
-mod agent;
-mod toolbelt;
 mod tool_caller;
 
-pub use agent::{Agent, ToolCall};
-pub use toolbelt::{ParameterSchema, ToolSchema, ToolHandler};
-pub use tool_caller::{Tool, ToolCaller};
+pub use crate::schema::{Agent, ToolCall, Tool, ToolSchema, ParameterSchema, ToolHandler};
+pub use tool_caller::ToolCaller;
