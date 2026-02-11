@@ -3,17 +3,17 @@ use serde_json::json;
 use std::io::{self, Write};
 
 use artificer::Message;
-use artificer::core::registry;
-use artificer::core::worker::Worker;
+use artificer::engine::registry;
+use artificer::engine::worker::Worker;
 use artificer::schema::Agent;
-use artificer::traits::ToolCaller;
+use artificer::schema::ToolCaller;
 use artificer::agents::artificer::Artificer;
-use artificer::services::conversation::ConversationManager;
+use artificer::services::conversation::Conversation;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let artificer = Artificer;
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager = Conversation::default();
     let worker = Worker::new(2); // poll every 2 seconds
     tokio::spawn(async move {
         if let Err(e) = worker.run().await {

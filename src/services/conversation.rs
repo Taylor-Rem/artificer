@@ -1,12 +1,12 @@
 use anyhow::Result;
 use crate::Message;
-use crate::core::db::Db;
+use crate::engine::db::Db;
 
-pub struct ConversationManager {
+pub struct Conversation {
     db: Db
 }
 
-impl Default for ConversationManager {
+impl Default for Conversation {
     fn default() -> Self {
         Self {
             db: Db::default()
@@ -14,9 +14,10 @@ impl Default for ConversationManager {
     }
 }
 
-impl ConversationManager {
+impl Conversation {
     pub async fn init_conversation(&self, user_message: Message, location: &str) -> Result<u64> {
         let conversation_id = self.create_conversation(location.to_string())?;
+        let _ = self.create_title(conversation_id, &user_message);
         Ok(conversation_id)
     }
 
@@ -74,11 +75,17 @@ impl ConversationManager {
         Ok(conn.last_insert_rowid() as u64)
     }
 
-    async fn create_title(&self, _conversation_id: u64, _user_message: Message) {
-        todo!()
+    fn create_title(&self, conversation_id: u64, user_message: &Message) -> Result<u64> {
+        let context = serde_json::json!({
+            "user_message": {
+                "role": user_message.role,
+                "content": user_message.content,
+            }
+        });
+        self.create_job("create_title", &serde_json::json!({ "conversation_id": conversation_id }), Some(&context), 1)
     }
 
-    pub fn create_summary(&self, _conversation: Vec<Message>) {
-        todo!()
+    pub fn create_summary(&self, conversation_id: u64) -> Result<u64> {
+        self.create_job("create_summary", &serde_json::json!({ "conversation_id": conversation_id }), None, 0)
     }
 }

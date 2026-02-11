@@ -1,14 +1,15 @@
-// src/worker.rs
 use anyhow::Result;
 use tokio::time::{sleep, Duration};
 use serde_json::Value;
-use crate::core::db::Db;
+use crate::engine::db::Db;
 use crate::agents::helper::Helper;
+use crate::services::title::Title;
 use crate::Message;
 
 pub struct Worker {
     db: Db,
     helper: Helper,
+    title_service: Title,
     poll_interval: Duration,
 }
 
@@ -17,6 +18,7 @@ impl Worker {
         Self {
             db: Db::default(),
             helper: Helper,
+            title_service: Title::default(),
             poll_interval: Duration::from_secs(poll_interval_secs),
         }
     }
@@ -66,7 +68,20 @@ impl Worker {
         // Update job status
         match result {
             Ok(res) => self.mark_job_complete(job_id, &res)?,
-            Err(e) => self.mark_job_failed(job_id, &e.to_string())?,
+            Err(e) => {
+                let exhausted = self.mark_job_failed(job_id, &e.to_string())?;
+                if exhausted && method == "create_title" {
+                    // Fallback: assign a random hash title
+                    if let Some(conversation_id) = arguments["conversation_id"].as_i64() {
+                        let hash = &uuid::Uuid::new_v4().to_string()[..8];
+                        let fallback_title = format!("conv_{}", hash);
+                        self.db.execute(
+                            "UPDATE conversation SET title = ?1 WHERE id = ?2",
+                            rusqlite::params![fallback_title, conversation_id]
+                        )?;
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -87,15 +102,26 @@ impl Worker {
             tool_calls: None,
         };
 
-        let title = self.helper.create_title(&message).await?;
+        let raw_title = self.helper.create_title(&message).await?;
+        let sanitized = self.title_service.sanitize_title(&raw_title);
 
-        // Update conversation with title
+        if sanitized.is_empty() {
+            return Err(anyhow::anyhow!("Generated title was empty after sanitization"));
+        }
+
+        let final_title = if self.title_service.title_exists(&sanitized) {
+            self.title_service.find_available_title(&sanitized)
+        } else {
+            sanitized
+        };
+
+        // Update conversation with validated title
         self.db.execute(
             "UPDATE conversation SET title = ?1 WHERE id = ?2",
-            rusqlite::params![title, conversation_id]
+            rusqlite::params![final_title, conversation_id]
         )?;
 
-        Ok(title)
+        Ok(final_title)
     }
 
     async fn create_summary(&self, args: &Value, _context: &Option<Value>) -> Result<String> {
@@ -145,7 +171,8 @@ impl Worker {
         Ok(())
     }
 
-    fn mark_job_failed(&self, job_id: i64, error: &str) -> Result<()> {
+    /// Returns `true` if retries are exhausted (job marked as "failed").
+    fn mark_job_failed(&self, job_id: i64, error: &str) -> Result<bool> {
         let conn = self.db.lock()?;
 
         // Get current retry count
@@ -162,13 +189,14 @@ impl Worker {
         )?;
 
         let new_retries = retries + 1;
-        let status = if new_retries >= max_retries { "failed" } else { "pending" };
+        let exhausted = new_retries >= max_retries;
+        let status = if exhausted { "failed" } else { "pending" };
 
         conn.execute(
             "UPDATE jobs SET status = ?1, retries = ?2, result = ?3 WHERE id = ?4",
             rusqlite::params![status, new_retries, error, job_id]
         )?;
 
-        Ok(())
+        Ok(exhausted)
     }
 }

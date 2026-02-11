@@ -35,14 +35,14 @@ macro_rules! register_toolbelt {
         }
 
         // Tool schemas for LLM consumption
-        pub static TOOL_SCHEMAS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
+        pub static TOOL_SCHEMAS: Lazy<Vec<$crate::schema::ToolSchema>> = Lazy::new(|| vec![
             $(
-                ToolSchema {
+                $crate::schema::ToolSchema {
                     name: concat!(stringify!($toolbelt_type), "::", $name),
                     description: $desc,
                     parameters: vec![
                         $(
-                            ParameterSchema {
+                            $crate::schema::ParameterSchema {
                                 name: $param_name,
                                 type_name: $param_type,
                                 description: $param_desc,

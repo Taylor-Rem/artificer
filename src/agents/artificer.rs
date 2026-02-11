@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::traits::{Agent, ToolCaller};
+use crate::schema::{Agent, ToolCaller};
 
 pub struct Artificer;
 
@@ -15,6 +15,6 @@ impl Agent for Artificer {
 
 impl ToolCaller for Artificer {
     fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String> {
-        crate::core::registry::use_tool(tool_name, args)
+        crate::engine::registry::use_tool(tool_name, args)
     }
 }

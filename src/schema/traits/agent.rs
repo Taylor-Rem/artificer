@@ -4,7 +4,7 @@ use anyhow::Result;
 use reqwest::Client;
 
 use crate::Message;
-use super::Tool;
+use crate::schema::Tool;
 
 #[derive(Serialize)]
 pub struct ChatRequest {
