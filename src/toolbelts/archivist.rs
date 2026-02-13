@@ -1,6 +1,7 @@
 use crate::register_toolbelt;
 use crate::engine::db::Db;
 use anyhow::Result;
+use crate::services::title::sanitize_title;
 
 #[derive(Clone)]
 pub struct Archivist {
@@ -31,8 +32,12 @@ register_toolbelt! {
                 description: "Lists all conversations with their IDs, titles, and locations",
                 params: []
             },
-            "retrieve_conversation" => retrieve_conversation {
-                description: "Retrieves a conversation by its title",
+            "get_summary" => get_summary {
+                description: "Get the conversations summary",
+                params: ["title": "string" => "Title of the conversation to retrieve"]
+            },
+            "get_conversation" => get_conversation {
+                description: "Retrieves a conversation and all messages by its title",
                 params: ["title": "string" => "Title of the conversation to retrieve"]
             },
         }
@@ -63,6 +68,76 @@ impl Archivist {
         self.db.query("SELECT id, title, location FROM conversation", [])
     }
 
+    fn get_summary(&self, args: &serde_json::Value) -> Result<String> {
+        let title = sanitize_title(args["title"].as_str().unwrap_or(""));
+        if title.is_empty() {
+            return Ok("Error: title cannot be empty".to_string());
+        }
+        self.db.query(
+            "SELECT summary \
+             FROM conversation \
+             WHERE title = ?1",
+            rusqlite::params![title],
+        )
+    }
+
+    fn get_conversation(&self, args: &serde_json::Value) -> Result<String> {
+        let title = args["title"].as_str().unwrap_or("");
+
+        if title.is_empty() {
+            return Ok("Error: title cannot be empty".to_string());
+        }
+
+        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+
+        // First get conversation metadata
+        let conv_result = conn.query_row(
+            "SELECT id, title, location FROM conversation WHERE title = ?1",
+            rusqlite::params![title],
+            |row| {
+                let id: i64 = row.get(0)?;
+                let title: Option<String> = row.get(1)?;
+                let location: String = row.get(2)?;
+                Ok((id, title, location))
+            },
+        );
+
+        match conv_result {
+            Ok((conv_id, conv_title, conv_location)) => {
+                let mut output = String::new();
+
+                // Add conversation header
+                output.push_str(&format!("title: {}\n", conv_title.unwrap_or("Untitled".to_string())));
+                output.push_str(&format!("location: {}\n", conv_location));
+                output.push_str("\nmessages:\n");
+
+                // Get all messages for this conversation
+                let mut stmt = conn.prepare(
+                    "SELECT role, message FROM message WHERE conversation_id = ?1 ORDER BY \"order\""
+                )?;
+
+                let messages = stmt.query_map(rusqlite::params![conv_id], |row| {
+                    let role: String = row.get(0)?;
+                    let message: String = row.get(1)?;
+                    Ok((role, message))
+                })?;
+
+                for message in messages {
+                    if let Ok((role, content)) = message {
+                        output.push_str(&format!("\nrole: {}\n", role));
+                        output.push_str(&format!("message: {}\n", content));
+                    }
+                }
+
+                Ok(output)
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Ok(format!("Error: Conversation '{}' not found", title))
+            }
+            Err(e) => Ok(format!("Error retrieving conversation: {}", e)),
+        }
+    }
+
     fn json_to_rusqlite(val: &serde_json::Value) -> rusqlite::types::Value {
         match val {
             serde_json::Value::Null => rusqlite::types::Value::Null,
@@ -79,18 +154,5 @@ impl Archivist {
         }
     }
 
-    fn retrieve_conversation(&self, args: &serde_json::Value) -> Result<String> {
-        let title = args["title"].as_str().unwrap_or("");
-        if title.is_empty() {
-            return Ok("Error: title cannot be empty".to_string());
-        }
-        self.db.query(
-            "SELECT c.id, c.title, c.location, m.id as message_id, m.role, m.message \
-             FROM conversation c \
-             LEFT JOIN message m ON m.conversation_id = c.id \
-             WHERE c.title = ?1 \
-             ORDER BY m.\"order\"",
-            rusqlite::params![title],
-        )
-    }
+
 }

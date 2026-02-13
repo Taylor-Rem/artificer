@@ -11,20 +11,6 @@ impl Default for Title {
 }
 
 impl Title {
-    pub fn sanitize_title(&self, title: &str) -> String {
-        title.chars()
-            .map(|c| match c {
-                'a'..='z' | 'A'..='Z' | '0'..='9' => c,
-                ' ' | '-' | '.' | '/' | '\\' => '_',
-                _ => '_',
-            })
-            .collect::<String>()
-            .split('_')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("_")
-    }
-
     pub fn title_exists(&self, title: &str) -> bool {
         if let Ok(conn) = self.db.lock() {
             let exists: bool = conn
@@ -53,4 +39,18 @@ impl Title {
             }
         }
     }
+}
+
+pub fn sanitize_title(title: &str) -> String {
+    title.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => c,
+            ' ' | '-' | '.' | '/' | '\\' => '_',
+            _ => '_',
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
 }

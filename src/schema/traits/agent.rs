@@ -54,7 +54,6 @@ pub trait Agent: Send + Sync {
     fn ollama_url(&self) -> &'static str;
     fn model(&self) -> &'static str;
     fn client(&self) -> Client;
-    fn system_prompt(&self) -> &'static str;
 
     async fn make_request(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>) -> Result<ResponseMessage> {
         let request = ChatRequest {

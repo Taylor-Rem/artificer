@@ -9,6 +9,7 @@ use artificer::schema::Agent;
 use artificer::schema::ToolCaller;
 use artificer::agents::artificer::Artificer;
 use artificer::services::conversation::Conversation;
+use artificer::schema::Task;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +25,7 @@ async fn main() -> Result<()> {
 
     let mut messages = vec![Message {
         role: "system".to_string(),
-        content: Some(artificer.system_prompt().to_string()),
+        content: Some(Task::Chat.instructions().to_string()),
         tool_calls: None,
     }];
     let mut conversation_id: Option<u64> = None;
