@@ -4,10 +4,9 @@ use std::io::{self, Write};
 
 use artificer::Message;
 use artificer::engine::registry;
-use artificer::engine::worker::Worker;
-use artificer::schema::Agent;
-use artificer::schema::ToolCaller;
+use artificer::schema::{Agent, ToolCaller};
 use artificer::agents::artificer::Artificer;
+use artificer::engine::worker::Worker;
 use artificer::services::conversation::Conversation;
 use artificer::schema::Task;
 
