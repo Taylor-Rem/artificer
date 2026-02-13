@@ -1,7 +1,8 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{sync::{Arc, Mutex, MutexGuard}, time::{SystemTime, UNIX_EPOCH}};
 use anyhow::Result;
 use rusqlite::Connection;
 use serde_json::json;
+use crate::schema::Task;
 
 #[derive(Clone)]
 pub struct Db {
@@ -62,8 +63,40 @@ impl Db {
         Ok(conn.execute(sql, params)?)
     }
 
+    pub fn query_row_optional<T, F>(&self, sql: &str, params: impl rusqlite::Params, f: F) -> Result<Option<T>>
+    where
+        F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+    {
+        let conn = self.lock()?;
+        match conn.query_row(sql, params, f) {
+            Ok(val) => Ok(Some(val)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
         self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))
+    }
+
+    pub fn create_job(&self, task: Task, arguments: &serde_json::Value, priority: u32) -> Result<u64> {
+        let conn = self.lock()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO jobs (method, arguments, priority, status, created_at)
+                     VALUES (?1, ?2, ?3, 'pending', ?4)",
+                        rusqlite::params![
+                        task.title(),
+                        arguments.to_string(),
+                        priority,
+                        now,
+                    ],
+        )?;
+
+        Ok(conn.last_insert_rowid() as u64)
     }
 
     fn create_tables(conn: &Connection) -> Result<()> {
@@ -105,6 +138,17 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_jobs_priority ON jobs(priority DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
+
+            CREATE TABLE IF NOT EXISTS task_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_name TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(task_name, key)
+            );
+            CREATE INDEX idx_task_memory_task ON task_memory(task_name);
         ")?;
         Ok(())
     }
