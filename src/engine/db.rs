@@ -68,7 +68,7 @@ impl Db {
 
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS conversation (
+            CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
                 summary TEXT,
@@ -78,7 +78,7 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_title ON conversation(title);
 
-            CREATE TABLE IF NOT EXISTS message (
+            CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id INTEGER,
                 role TEXT NOT NULL,
@@ -102,7 +102,6 @@ impl Db {
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 context TEXT
             );
-
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_jobs_priority ON jobs(priority DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);

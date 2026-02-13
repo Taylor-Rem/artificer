@@ -3,7 +3,7 @@ use tokio::time::{sleep, Duration};
 use serde_json::Value;
 use crate::engine::db::Db;
 use crate::agents::helper::Helper;
-use crate::services::title::Title;
+use crate::services::title::{Title, sanitize_title};
 use crate::Message;
 
 pub struct Worker {
@@ -103,7 +103,7 @@ impl Worker {
         };
 
         let raw_title = self.helper.create_title(&message).await?;
-        let sanitized = self.title_service.sanitize_title(&raw_title);
+        let sanitized = sanitize_title(&raw_title);
 
         if sanitized.is_empty() {
             return Err(anyhow::anyhow!("Generated title was empty after sanitization"));
