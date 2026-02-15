@@ -97,12 +97,12 @@ impl Worker {
             Err(e) => {
                 let exhausted = self.mark_job_failed(job.id, &e.to_string())?;
                 if exhausted && matches!(job.task, super::Task::TitleGeneration) {
-                    if let Some(conversation_id) = job.arguments["conversation_id"].as_i64() {
+                    if let Some(th_id) = job.arguments["th_id"].as_i64() {
                         let hash = &uuid::Uuid::new_v4().to_string()[..8];
                         let fallback_title = format!("conv_{}", hash);
                         self.db.execute(
                             "UPDATE conversations SET title = ?1 WHERE id = ?2",
-                            rusqlite::params![fallback_title, conversation_id]
+                            rusqlite::params![fallback_title, th_id]
                         )?;
                     }
                 }

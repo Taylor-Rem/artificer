@@ -110,7 +110,7 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
 
-            CREATE TABLE executed_tasks (
+            CREATE TABLE task_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
                 title TEXT UNIQUE,
@@ -123,29 +123,29 @@ impl Db {
 
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                executed_task_id INTEGER,
+                task_history_id INTEGER,
                 role TEXT NOT NULL,
                 message TEXT NOT NULL,
                 m_order INTEGER NOT NULL,
                 created INTEGER NOT NULL
-                FOREIGN KEY (executed_task_id) REFERENCES executed_tasks(id)
+                FOREIGN KEY (task_history_id) REFERENCES task_history(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_executed_task_id ON messages(executed_task_id);
+            CREATE INDEX IF NOT EXISTS idx_task_history_id ON messages(task_history_id);
 
             CREATE TABLE local_task_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
-                executed_task_id INTEGER NOT NULL,
+                task_history_id INTEGER NOT NULL,
                 key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(task_id, key),
                 FOREIGN KEY (task_id) REFERENCES tasks(id),
-                FOREIGN KEY (executed_task_id) REFERENCES executed_tasks(id)
+                FOREIGN KEY (task_history_id) REFERENCES task_history(id)
             );
             CREATE INDEX idx_local_task_data_task ON local_task_data(task_id);
-            CREATE INDEX idx_executed_tasks_task ON executed_tasks(task_id);
+            CREATE INDEX idx_task_history_task ON task_history(task_id);
 
             CREATE TABLE IF NOT EXISTS background (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

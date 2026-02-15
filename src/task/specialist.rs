@@ -111,10 +111,11 @@ impl Specialist {
     pub async fn execute(
         &self,
         url: &str,
+        current_task: &Task,  // Add current_task parameter
         messages: Vec<Message>,
         streaming: bool,
     ) -> Result<ResponseMessage> {
-        let tools = self.tools();
+        let tools = self.tools(current_task);  // Pass it here
         let tools_option = if tools.is_empty() { None } else { Some(tools) };
 
         if streaming {

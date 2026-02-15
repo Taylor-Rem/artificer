@@ -4,6 +4,7 @@ pub mod worker;
 pub mod interactive;
 pub mod background;
 mod registry;
+pub mod current_task;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
@@ -11,7 +12,7 @@ use serde_json::{json, Value};
 use crate::memory::Db;
 use crate::Message;
 use crate::tools::registry as tool_registry;
-use specialist::{Specialist, ExecutionContext, ResponseMessage};
+use specialist::{ExecutionContext, ResponseMessage, Specialist};
 
 #[derive(Debug, Clone)]
 pub enum TaskType {
@@ -196,13 +197,11 @@ impl Task {
     ) -> Result<ResponseMessage> {
         match self.task_type() {
             TaskType::Singular => {
-                // Simple one-shot execution
                 let specialist = self.specialist();
                 let url = self.execution_context().url();
-                specialist.execute(url, messages, streaming).await
+                specialist.execute(url, self, messages, streaming).await
             }
             TaskType::AgenticLoop => {
-                // Agentic loop: handle tool calls until completion
                 self.execute_agentic_loop(messages, streaming).await
             }
         }
@@ -237,7 +236,7 @@ impl Task {
         let url = self.execution_context().url();
 
         loop {
-            let response = specialist.execute(url, messages.clone(), streaming).await?;
+            let response = specialist.execute(url, self, messages.clone(), streaming).await?;
 
             // Add assistant response to history
             messages.push(response.to_message());
@@ -278,5 +277,9 @@ impl Task {
                 return Ok(response);
             }
         }
+    }
+
+    pub async fn start_interactive_session(&self) -> Result<()> {
+        interactive::chat::execute().await
     }
 }

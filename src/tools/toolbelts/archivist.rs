@@ -113,7 +113,7 @@ impl Archivist {
 
                 // Get all messages for this conversation
                 let mut stmt = conn.prepare(
-                    "SELECT role, message FROM message WHERE conversation_id = ?1 ORDER BY \"order\""
+                    "SELECT role, message FROM message WHERE th_id = ?1 ORDER BY \"order\""
                 )?;
 
                 let messages = stmt.query_map(rusqlite::params![conv_id], |row| {
