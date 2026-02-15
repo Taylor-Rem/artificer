@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::Message;
-use crate::engine::db::Db;
-use crate::schema::Task;
+use crate::memory::Db;
+use crate::task::Task;
 
 pub struct Conversation {
     db: Db

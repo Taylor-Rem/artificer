@@ -1,10 +1,10 @@
-pub mod engine;
-pub mod schema;
+pub mod memory;
 pub mod services;
-pub mod agent;
-pub mod toolbelts;
+pub mod task;
+pub mod tools;
+
 use serde::{Deserialize, Serialize};
-use agent::ToolCall;
+use task::specialist::ToolCall;
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct Message {

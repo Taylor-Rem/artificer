@@ -1,7 +1,13 @@
+pub mod specialist;
+pub mod async_executer;
+pub mod tasks;
+
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 use serde_json::Value;
-use crate::engine::db::Db;
+use crate::memory::Db;
+use specialist::Specialist;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Task {
     TitleGeneration,
@@ -39,6 +45,19 @@ impl Task {
             Task::CodeReview => "code_review",
             Task::Research => "research",
             Task::MemoryExtraction => "memory_extraction"
+        }
+    }
+
+    pub fn specialist(&self) -> Specialist {
+        match self {
+            Task::TitleGeneration => Specialist::SpeedReasoner,
+            Task::Summarization => Specialist::SpeedReasoner,
+            Task::Translation => Specialist::SpeedReasoner,
+            Task::Extraction => Specialist::SpeedReasoner,
+            Task::Chat => Specialist::PowerToolCaller,
+            Task::CodeReview => Specialist::PowerCoder,
+            Task::Research => Specialist::PowerReasoner,
+            Task::MemoryExtraction => Specialist::SpeedReasoner,
         }
     }
 

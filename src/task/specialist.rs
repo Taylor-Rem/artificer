@@ -1,7 +1,3 @@
-mod attributes;
-
-pub use attributes::{Strength, Capability};
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use anyhow::Result;
@@ -10,7 +6,7 @@ use futures_util::StreamExt;
 use std::io::{self, Write};
 
 use crate::Message;
-use crate::schema::{Tool, Task};
+use crate::tools::Tool;
 
 #[derive(Serialize)]
 pub struct ChatRequest {
@@ -62,63 +58,123 @@ struct StreamChunk {
     done: bool,
 }
 
-pub struct Agent {
-    pub strength: Strength,
-    pub capability: Capability,
-    client: Client,
+pub enum Specialist {
+    PowerToolCaller,
+    PowerReasoner,
+    PowerQuick,
+    PowerCoder,
+    SpeedToolCaller,
+    SpeedReasoner,
+    SpeedQuick,
+    SpeedCoder,
 }
 
-impl Agent {
-    pub fn new(strength: Strength, capability: Capability) -> Self {
-        Self {
-            strength,
-            capability,
-            client: Client::new(),
+impl Specialist {
+    pub fn url(&self) -> &'static str {
+        match self {
+            Specialist::PowerToolCaller
+            | Specialist::PowerReasoner
+            | Specialist::PowerQuick
+            | Specialist::PowerCoder => "http://localhost:11435/api/chat",
+
+            Specialist::SpeedToolCaller
+            | Specialist::SpeedReasoner
+            | Specialist::SpeedQuick
+            | Specialist::SpeedCoder => "http://localhost:11434/api/chat",
         }
     }
 
-    fn ollama_url(&self) -> &'static str {
-        self.strength.url()
-    }
+    pub fn model(&self) -> &'static str {
+        match self {
+            Specialist::PowerToolCaller => "qwen3:32b",
+            Specialist::PowerReasoner => "qwen3:32b",
+            Specialist::PowerQuick => "qwen3:8b",
+            Specialist::PowerCoder => "qwen3:32b",
 
-    fn model(&self) -> &'static str {
-        match (&self.strength, &self.capability) {
-            (Strength::Power, Capability::Reasoner) => "qwen3:32b",
-            (Strength::Power, Capability::ToolCaller) => "qwen3:32b",
-            (Strength::Power, Capability::Quick) => "qwen3:8b",
-            (Strength::Power, Capability::Coder) => "qwen3:32b",
-            (Strength::Speed, _) => "qwen3:8b",
+            Specialist::SpeedToolCaller => "qwen3:8b",
+            Specialist::SpeedReasoner => "qwen3:8b",
+            Specialist::SpeedQuick => "qwen3:8b",
+            Specialist::SpeedCoder => "qwen3:8b",
         }
     }
 
-    pub async fn make_request(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>) -> Result<ResponseMessage> {
+    pub fn tools(&self) -> Vec<Tool> {
+        use crate::tools::registry;
+
+        match self {
+            // Full toolbelt for chat/research
+            Specialist::PowerToolCaller => registry::get_tools(),
+
+            // Task selector gets only the task selection tool
+            Specialist::PowerQuick => registry::get_tools_for(&["TaskSelector::select_task"]),
+
+            // No tools for pure reasoning/generation tasks
+            Specialist::PowerReasoner
+            | Specialist::SpeedReasoner
+            | Specialist::SpeedQuick => vec![],
+
+            // Coder gets file manipulation tools only
+            Specialist::PowerCoder
+            | Specialist::SpeedCoder => registry::get_tools_for(&["FileSmith"]),
+
+            Specialist::SpeedToolCaller => registry::get_tools(),
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        messages: Vec<Message>,
+        streaming: bool,
+    ) -> Result<ResponseMessage> {
+        let tools = self.tools();
+        let tools_option = if tools.is_empty() { None } else { Some(tools) };
+
+        if streaming {
+            self.execute_streaming(messages, tools_option).await
+        } else {
+            self.execute_standard(messages, tools_option).await
+        }
+    }
+
+    async fn execute_standard(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<Tool>>,
+    ) -> Result<ResponseMessage> {
+        let client = Client::new();
         let request = ChatRequest {
             model: self.model().to_string(),
-            messages: messages.clone(),
+            messages,
             stream: false,
             tools,
         };
-        let response = self
-            .client
-            .post(self.ollama_url())
+
+        let response = client
+            .post(self.url())
             .json(&request)
             .send()
             .await?
             .json::<ChatResponse>()
             .await?;
+
         Ok(response.message)
     }
 
-    pub async fn make_request_streaming(&self, messages: &Vec<Message>, tools: Option<Vec<Tool>>) -> Result<ResponseMessage> {
+    async fn execute_streaming(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<Tool>>,
+    ) -> Result<ResponseMessage> {
+        let client = Client::new();
         let request = ChatRequest {
             model: self.model().to_string(),
-            messages: messages.clone(),
+            messages,
             stream: true,
             tools,
         };
-        let response = self
-            .client
-            .post(self.ollama_url())
+
+        let response = client
+            .post(self.url())
             .json(&request)
             .send()
             .await?;
@@ -152,10 +208,8 @@ impl Agent {
                     }
                 }
 
-                if chunk.done {
-                    if chunk.message.tool_calls.is_some() {
-                        tool_calls = chunk.message.tool_calls.clone();
-                    }
+                if chunk.done && chunk.message.tool_calls.is_some() {
+                    tool_calls = chunk.message.tool_calls.clone();
                 }
             }
         }
@@ -173,10 +227,8 @@ impl Agent {
                         full_content.push_str(content);
                     }
                 }
-                if chunk.done {
-                    if chunk.message.tool_calls.is_some() {
-                        tool_calls = chunk.message.tool_calls.clone();
-                    }
+                if chunk.done && chunk.message.tool_calls.is_some() {
+                    tool_calls = chunk.message.tool_calls.clone();
                 }
             }
         }
@@ -186,37 +238,5 @@ impl Agent {
             content: if full_content.is_empty() { None } else { Some(full_content) },
             tool_calls,
         })
-    }
-
-    pub async fn create_title(&self, user_message: &Message) -> Result<String> {
-        Ok(self.make_request(&vec![
-            Message {
-                role: "system".to_string(),
-                content: Some(Task::TitleGeneration.instructions().to_string()),
-                tool_calls: None,
-            },
-            user_message.clone()
-        ], None)
-            .await?
-            .content
-            .unwrap_or_else(|| "Untitled".to_string()))
-    }
-
-    pub async fn summarize(&self, text: &str) -> Result<String> {
-        self.make_request(&vec![
-            Message {
-                role: "system".to_string(),
-                content: Some(Task::Summarization.instructions().to_string()),
-                tool_calls: None,
-            },
-            Message {
-                role: "user".to_string(),
-                content: Some(text.to_string()),
-                tool_calls: None,
-            }
-        ], None)
-            .await?
-            .content
-            .ok_or_else(|| anyhow::anyhow!("No summary generated"))
     }
 }

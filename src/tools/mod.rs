@@ -1,7 +1,13 @@
-// src/schema/tool.rs
+pub mod toolbelts;
+pub mod registry;
+
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::{json, Value};
+
+pub trait ToolCaller {
+    fn use_tool(&self, tool_name: &str, args: &Value) -> Result<String>;
+}
 
 /// Schema definition for a tool (used internally)
 #[derive(Debug, Clone)]

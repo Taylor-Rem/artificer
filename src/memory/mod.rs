@@ -2,7 +2,7 @@ use std::{sync::{Arc, Mutex, MutexGuard}, time::{SystemTime, UNIX_EPOCH}};
 use anyhow::Result;
 use rusqlite::Connection;
 use serde_json::json;
-use crate::schema::Task;
+use crate::task::Task;
 
 #[derive(Clone)]
 pub struct Db {
@@ -15,6 +15,8 @@ impl Default for Db {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("RustroverProjects")
             .join("artificer")
+            .join("src")
+            .join("memory")
             .join("memory.db");
 
         if let Some(parent) = db_path.parent() {
