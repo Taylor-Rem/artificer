@@ -105,12 +105,12 @@ impl Db {
         conn.execute_batch("
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL UNIQUE,  -- 'chat', 'research', 'code_review', 'general'
+                title TEXT NOT NULL UNIQUE,
                 description TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
 
-            CREATE TABLE task_history (
+            CREATE TABLE IF NOT EXISTS task_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
                 title TEXT UNIQUE,
@@ -127,12 +127,12 @@ impl Db {
                 role TEXT NOT NULL,
                 message TEXT NOT NULL,
                 m_order INTEGER NOT NULL,
-                created INTEGER NOT NULL
+                created INTEGER NOT NULL,
                 FOREIGN KEY (task_history_id) REFERENCES task_history(id)
             );
             CREATE INDEX IF NOT EXISTS idx_task_history_id ON messages(task_history_id);
 
-            CREATE TABLE local_task_data (
+            CREATE TABLE IF NOT EXISTS local_task_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
                 task_history_id INTEGER NOT NULL,
@@ -144,8 +144,8 @@ impl Db {
                 FOREIGN KEY (task_id) REFERENCES tasks(id),
                 FOREIGN KEY (task_history_id) REFERENCES task_history(id)
             );
-            CREATE INDEX idx_local_task_data_task ON local_task_data(task_id);
-            CREATE INDEX idx_task_history_task ON task_history(task_id);
+            CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(task_id);
+            CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(id);
 
             CREATE TABLE IF NOT EXISTS background (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,5 +166,8 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_jobs_created ON background(created_at);
         ")?;
         Ok(())
+    }
+    fn populate_tables(conn: &Connection) -> Result<()> {
+
     }
 }
