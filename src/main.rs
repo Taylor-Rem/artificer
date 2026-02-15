@@ -3,11 +3,10 @@ use serde_json::json;
 use std::io::{self, Write};
 
 use artificer::Message;
-use artificer::engine::registry;
-use artificer::agent::{Agent, Strength, Capability};
-use artificer::engine::worker::Worker;
+use artificer::tools::registry;
+use artificer::task::async_executer::Worker;
+use artificer::task::Task;
 use artificer::services::conversation::Conversation;
-use artificer::schema::Task;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,6 +18,8 @@ async fn main() -> Result<()> {
     });
     let task = Task::Chat;
     let tools = registry::get_tools();
+    let specialist = task.specialist();
+    let conversation = Conversation::default();
 
     let mut messages = vec![Message {
         role: "system".to_string(),
@@ -31,12 +32,14 @@ async fn main() -> Result<()> {
 
     println!("Artificer is ready. Type 'quit' to exit.\n");
     println!("Available tools: {}", tools.iter().map(|t| t.function.name.as_str()).collect::<Vec<_>>().join(", "));
-    println!(); 
-    
+    println!();
+
     loop {
         let input = wait_for_user_input()?;
         if input.eq_ignore_ascii_case("quit") {
-            conversation.summarize(conversation_id.unwrap())?;
+            if let Some(id) = conversation_id {
+                conversation.summarize(id)?;
+            }
             println!("Goodbye!");
             break;
         }
@@ -70,7 +73,7 @@ async fn main() -> Result<()> {
 
         // Chat loop - handles tool calls until we get a final response
         loop {
-            let response = artificer.make_request_streaming(&messages, Some(tools.clone())).await?;
+            let response = specialist.execute(messages.clone(), true).await?;
 
             // Add assistant message to history
             messages.push(response.to_message());

@@ -1,15 +1,13 @@
 use anyhow::Result;
 use tokio::time::{sleep, Duration};
 use serde_json::Value;
-use crate::engine::db::Db;
-use crate::engine::jobs::{self, JobContext};
-use crate::agent::{Agent, Strength, Capability};
+use crate::memory::Db;
+use super::tasks::{self, JobContext};
+use super::Task;
 use crate::services::title::Title;
-use crate::schema::Task;
 
 pub struct Worker {
     db: Db,
-    agent: Agent,
     title_service: Title,
     poll_interval: Duration,
 }
@@ -40,7 +38,6 @@ impl Worker {
     pub fn new(poll_interval_secs: u64) -> Self {
         Self {
             db: Db::default(),
-            agent: Agent::new(Strength::Speed, Capability::Quick),
             title_service: Title::default(),
             poll_interval: Duration::from_secs(poll_interval_secs),
         }
@@ -71,13 +68,14 @@ impl Worker {
 
         self.mark_job_running(job.id)?;
 
+        let specialist = job.task.specialist();
         let ctx = JobContext {
             db: &self.db,
-            agent: &self.agent,
+            specialist: &specialist,
             title_service: &self.title_service,
         };
 
-        let result = jobs::execute(&job.task, &ctx, &job.arguments).await;
+        let result = tasks::execute(&job.task, &ctx, &job.arguments).await;
 
         match result {
             Ok(res) => self.mark_job_complete(job.id, &res)?,

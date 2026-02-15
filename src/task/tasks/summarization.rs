@@ -1,9 +1,10 @@
-// jobs/summarization.rs
 use anyhow::Result;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use super::JobContext;
+use crate::Message;
+use crate::task::Task;
 
 pub fn execute<'a>(
     ctx: &'a JobContext<'_>,
@@ -14,7 +15,7 @@ pub fn execute<'a>(
             .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
         let messages_json = ctx.db.query(
-            "SELECT role, message FROM message
+            "SELECT role, message FROM messages
              WHERE conversation_id = ?1
              ORDER BY \"order\"",
             rusqlite::params![conversation_id]
@@ -28,10 +29,24 @@ pub fn execute<'a>(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let summary = ctx.agent.summarize(&text).await?;
+        let llm_messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: Some(Task::Summarization.instructions().to_string()),
+                tool_calls: None,
+            },
+            Message {
+                role: "user".to_string(),
+                content: Some(text),
+                tool_calls: None,
+            },
+        ];
+
+        let response = ctx.specialist.execute(llm_messages, false).await?;
+        let summary = response.content.unwrap_or_default();
 
         ctx.db.execute(
-            "UPDATE conversation SET summary = ?1 WHERE id = ?2",
+            "UPDATE conversations SET summary = ?1 WHERE id = ?2",
             rusqlite::params![summary, conversation_id]
         )?;
 

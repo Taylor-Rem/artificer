@@ -1,4 +1,3 @@
-// jobs/title_generation.rs
 use anyhow::Result;
 use serde_json::Value;
 use std::future::Future;
@@ -6,6 +5,7 @@ use std::pin::Pin;
 use super::JobContext;
 use crate::Message;
 use crate::services::title::sanitize_title;
+use crate::task::Task;
 
 pub fn execute<'a>(
     ctx: &'a JobContext<'_>,
@@ -24,7 +24,17 @@ pub fn execute<'a>(
             tool_calls: None,
         };
 
-        let raw_title = ctx.agent.create_title(&message).await?;
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: Some(Task::TitleGeneration.instructions().to_string()),
+                tool_calls: None,
+            },
+            message,
+        ];
+
+        let response = ctx.specialist.execute(messages, false).await?;
+        let raw_title = response.content.unwrap_or_default();
         let sanitized = sanitize_title(&raw_title);
 
         if sanitized.is_empty() {
@@ -38,7 +48,7 @@ pub fn execute<'a>(
         };
 
         ctx.db.execute(
-            "UPDATE conversation SET title = ?1 WHERE id = ?2",
+            "UPDATE conversations SET title = ?1 WHERE id = ?2",
             rusqlite::params![final_title, conversation_id]
         )?;
 
