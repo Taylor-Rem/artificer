@@ -8,24 +8,24 @@ pub struct AppState {
 }
 
 struct StateInner {
+    device_id: i64,
     interactive_task: Task,
     background_task: Option<Task>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
+impl AppState {
+    pub fn new(device_id: i64) -> Self {
         Self {
             inner: Arc::new(RwLock::new(StateInner {
+                device_id,
                 interactive_task: Task::Chat,
                 background_task: None,
             }))
         }
     }
-}
 
-impl AppState {
-    pub fn new() -> Self {
-        Self::default()
+    pub async fn device_id(&self) -> i64 {
+        self.inner.read().await.device_id
     }
 
     pub async fn current_task(&self) -> Task {

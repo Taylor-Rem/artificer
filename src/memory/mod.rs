@@ -91,21 +91,22 @@ impl Db {
         self.db.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))
     }
 
-    pub fn create_job(&self, task: Task, arguments: &serde_json::Value, priority: u32) -> Result<u64> {
+    pub fn create_job(&self, device_id: i64, task: Task, arguments: &serde_json::Value, priority: u32) -> Result<u64> {
         let conn = self.lock()?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO background (method, arguments, priority, status, created_at)
-                     VALUES (?1, ?2, ?3, 'pending', ?4)",
-                        rusqlite::params![
-                        task.title(),
-                        arguments.to_string(),
-                        priority,
-                        now,
-                    ],
+            "INSERT INTO background (device_id, method, arguments, priority, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
+            rusqlite::params![
+                device_id,
+                task.title(),
+                arguments.to_string(),
+                priority,
+                now,
+            ],
         )?;
 
         Ok(conn.last_insert_rowid() as u64)
@@ -113,78 +114,135 @@ impl Db {
 
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute_batch("
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL UNIQUE,
-            description TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
+            -- Device registry
+            CREATE TABLE IF NOT EXISTS devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_name TEXT NOT NULL UNIQUE,
+                created INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL,
+                metadata TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name);
 
-        CREATE TABLE IF NOT EXISTS task_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id INTEGER NOT NULL,
-            title TEXT UNIQUE,
-            summary TEXT,
-            location TEXT NOT NULL,
-            created INTEGER NOT NULL,
-            last_accessed INTEGER NOT NULL,
-            FOREIGN KEY (task_id) REFERENCES tasks(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE
-        );
+            -- Task definitions (global - same across all devices)
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL UNIQUE,
+                description TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_title ON tasks(title);
 
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_history_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            message TEXT NOT NULL,
-            m_order INTEGER NOT NULL,
-            created INTEGER NOT NULL,
-            FOREIGN KEY (task_history_id) REFERENCES task_history(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_task_history_id ON messages(task_history_id);
+            -- Conversations (device-specific)
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER NOT NULL,
+                title TEXT,
+                summary TEXT,
+                created INTEGER NOT NULL,
+                last_accessed INTEGER NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES devices(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                UNIQUE(device_id, title)
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversations_device ON conversations(device_id);
+            CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(device_id, title);
 
-        CREATE TABLE IF NOT EXISTS local_task_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id INTEGER NOT NULL,
-            task_history_id INTEGER NOT NULL,
-            key TEXT NOT NULL,
-            value TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            UNIQUE(task_id, key),
-            FOREIGN KEY (task_id) REFERENCES tasks(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            FOREIGN KEY (task_history_id) REFERENCES task_history(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(task_id);
-        CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(id);
+            -- Task execution history (device-specific)
+            CREATE TABLE IF NOT EXISTS task_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER NOT NULL,
+                task_id INTEGER NOT NULL,
+                conversation_id INTEGER,
+                location TEXT NOT NULL,
+                created INTEGER NOT NULL,
+                completed INTEGER,
+                status TEXT NOT NULL DEFAULT 'running',
+                FOREIGN KEY (device_id) REFERENCES devices(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                    ON DELETE SET NULL
+                    ON UPDATE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_history_device ON task_history(device_id);
+            CREATE INDEX IF NOT EXISTS idx_task_history_conversation ON task_history(conversation_id);
 
-        CREATE TABLE IF NOT EXISTS background (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            method TEXT NOT NULL,
-            arguments TEXT NOT NULL,
-            priority INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at INTEGER NOT NULL,
-            started_at INTEGER,
-            completed_at INTEGER,
-            result TEXT,
-            retries INTEGER NOT NULL DEFAULT 0,
-            max_retries INTEGER NOT NULL DEFAULT 3,
-            context TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
-        CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
-        CREATE INDEX IF NOT EXISTS idx_jobs_created ON background(created_at);
-    ")?;
+            -- Messages (device-specific via conversation)
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                message TEXT NOT NULL,
+                m_order INTEGER NOT NULL,
+                created INTEGER NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+
+            -- Local task data (device-specific)
+            CREATE TABLE IF NOT EXISTS local_task_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER NOT NULL,
+                task_id INTEGER NOT NULL,
+                conversation_id INTEGER,
+                task_history_id INTEGER,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                memory_type TEXT NOT NULL CHECK(memory_type IN ('fact', 'preference', 'context')),
+                confidence REAL NOT NULL DEFAULT 1.0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_accessed INTEGER,  -- Track when this was used
+                UNIQUE(device_id, task_id, key),
+                FOREIGN KEY (device_id) REFERENCES devices(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                FOREIGN KEY (task_history_id) REFERENCES task_history(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_local_task_data_device ON local_task_data(device_id);
+            CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(device_id, task_id);
+            CREATE INDEX IF NOT EXISTS idx_local_task_data_type ON local_task_data(memory_type);
+
+            -- Background jobs (track which device queued)
+            CREATE TABLE IF NOT EXISTS background (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER,
+                method TEXT NOT NULL,
+                arguments TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                started_at INTEGER,
+                completed_at INTEGER,
+                result TEXT,
+                retries INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                context TEXT,
+                FOREIGN KEY (device_id) REFERENCES devices(id)
+                    ON DELETE SET NULL
+                    ON UPDATE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_device ON background(device_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
+        ")?;
         Ok(())
     }
+
     fn populate_tables(conn: &Connection) -> Result<()> {
         for task in Task::all() {
             conn.execute(

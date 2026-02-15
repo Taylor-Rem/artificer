@@ -1,18 +1,19 @@
 use anyhow::Result;
 use tokio::sync::watch;
 
-use artificer::task::{Task, worker::Worker};
-use artificer::state::AppState;
+use artificer::api;
+use artificer::task::worker::Worker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let state = AppState::new();
+    println!("Starting Artificer...\n");
 
-    // Create shutdown channel
+    // Create shutdown channel (shared between API server and worker)
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Start background worker
-    let worker = Worker::new(2, shutdown_rx);
+    let worker_shutdown_rx = shutdown_rx.clone();
+    let worker = Worker::new(2, worker_shutdown_rx);
     let worker_handle = tokio::spawn(async move {
         if let Err(e) = worker.run().await {
             eprintln!("Worker crashed: {}", e);
@@ -20,21 +21,28 @@ async fn main() -> Result<()> {
         worker
     });
 
-    println!("Artificer is ready. Type 'quit' to exit.\n");
+    // Start API server
+    let api_shutdown_rx = shutdown_rx.clone();
+    let api_handle = tokio::spawn(async move {
+        if let Err(e) = api::start_server(api_shutdown_rx).await {
+            eprintln!("API server crashed: {}", e);
+        }
+    });
 
-    // Run interactive session
-    Task::Chat.start_interactive_session(state).await?;
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c().await?;
+    println!("\nReceived shutdown signal...");
 
-    // Signal worker to stop accepting new jobs
-    println!("\nShutting down...");
+    // Signal shutdown to both server and worker
     let _ = shutdown_tx.send(true);
 
-    // Wait for worker to finish current job and get it back
-    let worker = worker_handle.await?;
+    // Wait for API server to stop
+    let _ = api_handle.await;
 
-    // Process all remaining jobs
+    // Wait for worker to finish and drain queue
+    let worker = worker_handle.await?;
     worker.drain_queue().await?;
 
-    println!("Goodbye!");
+    println!("Artificer shutdown complete.");
     Ok(())
 }

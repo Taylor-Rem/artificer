@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -7,45 +8,80 @@ use crate::task::specialist::ExecutionContext;
 use crate::Message;
 use crate::task::Task;
 
+#[derive(Deserialize, Debug)]
+struct ExtractedMemory {
+    key: String,
+    value: String,
+    memory_type: String,  // "fact", "preference", or "context"
+    confidence: f64,
+}
+
 pub fn execute<'a>(
     ctx: &'a JobContext<'_>,
     args: &'a Value
 ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
     Box::pin(async move {
-        let task_history_id = args["task_history_id"].as_i64()
-            .ok_or_else(|| anyhow::anyhow!("Missing task_history_id"))?;
+        let conversation_id = args["conversation_id"].as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
-        // Get task type and messages
-        let task_info = ctx.db.query_row_optional(
-            "SELECT t.title, et.task_id
-             FROM task_historys et
-             JOIN tasks t ON et.task_id = t.id
-             WHERE et.id = ?1",
-            rusqlite::params![task_history_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        )?.ok_or_else(|| anyhow::anyhow!("Executed task not found"))?;
+        // Get task types used in this conversation
+        let task_info_json = ctx.db.query(
+            "SELECT DISTINCT t.title, t.id
+             FROM task_history th
+             JOIN tasks t ON th.task_id = t.id
+             WHERE th.conversation_id = ?1",
+            rusqlite::params![conversation_id]
+        )?;
 
-        let (task_title, task_id) = task_info;
+        let task_info: Vec<Value> = serde_json::from_str(&task_info_json)?;
 
+        // Get all messages in the conversation
         let messages_json = ctx.db.query(
             "SELECT role, message FROM messages
-             WHERE task_history_id = ?1
-             ORDER BY \"order\"",
-            rusqlite::params![task_history_id]
+             WHERE conversation_id = ?1
+             ORDER BY m_order",
+            rusqlite::params![conversation_id]
         )?;
 
         let messages: Vec<Value> = serde_json::from_str(&messages_json)?;
-        let task_text: String = messages.iter()
+        let conversation_text: String = messages.iter()
             .map(|m| format!("{}: {}",
                              m["role"].as_str().unwrap_or(""),
                              m["message"].as_str().unwrap_or("")))
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Ask LLM to extract learnings
+        // Build context about tasks used
+        let task_context = if task_info.is_empty() {
+            "chat".to_string()
+        } else {
+            task_info.iter()
+                .filter_map(|t| t["title"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        // Ask LLM to extract learnings WITH TYPES
         let extraction_prompt = format!(
-            "Task context: {}\n\nTask:\n{}\n\nExtract facts.",
-            task_title, task_text
+            "Tasks used: {}\n\nConversation:\n{}\n\n\
+            Extract key information from this conversation and classify each as:\n\
+            - FACT: Objective, verifiable information (OS, paths, tools, project details)\n\
+            - PREFERENCE: User's subjective choices (style, tone, workflow preferences)\n\
+            - CONTEXT: Current/temporary situation (what they're working on now)\n\n\
+            Return a JSON array with this structure:\n\
+            [{{\n  \
+              \"key\": \"operating_system\",\n  \
+              \"value\": \"Ubuntu 22.04\",\n  \
+              \"memory_type\": \"fact\",\n  \
+              \"confidence\": 1.0\n\
+            }}]\n\n\
+            Rules:\n\
+            - Facts should have high confidence (0.9-1.0)\n\
+            - Preferences should have medium confidence (0.6-0.9)\n\
+            - Context should vary based on how recent/relevant (0.5-0.9)\n\
+            - Only extract information that will be useful later\n\
+            - Ignore ephemeral chat content",
+            task_context, conversation_text
         );
 
         let llm_messages = vec![
@@ -68,47 +104,77 @@ pub fn execute<'a>(
             false
         ).await?;
 
-        let facts_json = response.content.unwrap_or_default();
-        let facts: Vec<Value> = serde_json::from_str(&facts_json)?;
+        let memories_json = response.content.unwrap_or_default();
+        let memories: Vec<ExtractedMemory> = serde_json::from_str(&memories_json)?;
 
-        // Store learnings
+        // Get device_id from conversation
+        let device_id: i64 = ctx.db.query_row_optional(
+            "SELECT device_id FROM conversations WHERE id = ?1",
+            rusqlite::params![conversation_id],
+            |row| row.get(0)
+        )?.ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+
+        // Store learnings with types
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
 
-        for fact in &facts {
-            let key = fact["key"].as_str().unwrap_or("");
-            let value = fact["value"].as_str().unwrap_or("");
-
-            if key.is_empty() || value.is_empty() {
+        for memory in &memories {
+            if memory.key.is_empty() || memory.value.is_empty() {
                 continue;
             }
 
-            // Determine if this should be general or task-specific
-            let target_task_id = if is_general_fact(key) { 1 } else { task_id };
+            // Validate memory_type
+            if !matches!(memory.memory_type.as_str(), "fact" | "preference" | "context") {
+                eprintln!("Warning: Invalid memory_type '{}', skipping", memory.memory_type);
+                continue;
+            }
+
+            // Determine target task (general vs task-specific)
+            let target_task_id = if is_general_memory(&memory.key) { 1 } else { 2 };
 
             ctx.db.execute(
-                "INSERT INTO local_task_data (task_id, task_history_id, key, value, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(task_id, key) DO UPDATE SET
+                "INSERT INTO local_task_data
+                 (device_id, task_id, conversation_id, key, value, memory_type, confidence, created_at, updated_at, last_accessed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(device_id, task_id, key) DO UPDATE SET
                      value = excluded.value,
+                     memory_type = excluded.memory_type,
+                     confidence = excluded.confidence,
                      updated_at = excluded.updated_at,
-                     task_history_id = excluded.task_history_id",
-                rusqlite::params![target_task_id, task_history_id, key, value, now, now]
+                     conversation_id = excluded.conversation_id",
+                rusqlite::params![
+                    device_id,
+                    target_task_id,
+                    conversation_id,
+                    memory.key,
+                    memory.value,
+                    memory.memory_type,
+                    memory.confidence,
+                    now,
+                    now,
+                    now
+                ]
             )?;
         }
 
-        Ok(format!("Extracted {} facts", facts.len()))
+        Ok(format!("Extracted {} memories ({} facts, {} preferences, {} context)",
+                   memories.len(),
+                   memories.iter().filter(|m| m.memory_type == "fact").count(),
+                   memories.iter().filter(|m| m.memory_type == "preference").count(),
+                   memories.iter().filter(|m| m.memory_type == "context").count()
+        ))
     })
 }
 
-fn is_general_fact(key: &str) -> bool {
+fn is_general_memory(key: &str) -> bool {
     // Facts that apply across all tasks
     matches!(key,
         "operating_system" |
         "home_directory" |
         "user_name" |
-        "preferred_language" |
-        "timezone"
+        "timezone" |
+        "shell" |
+        "editor"
     )
 }
