@@ -1,3 +1,3 @@
 pub mod title_generation;
 pub mod summarization;
-mod memory_extraction;
+pub(crate) mod memory_extraction;

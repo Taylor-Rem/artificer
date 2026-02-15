@@ -12,14 +12,14 @@ pub fn execute<'a>(
     args: &'a Value
 ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
     Box::pin(async move {
-        let th_id = args["th_id"].as_i64()
-            .ok_or_else(|| anyhow::anyhow!("Missing th_id"))?;
+        let conversation_id = args["conversation_id"].as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
         let messages_json = ctx.db.query(
             "SELECT role, message FROM messages
-             WHERE task_history_id = ?1
-             ORDER BY \"order\"",
-            rusqlite::params![th_id]
+             WHERE conversation_id = ?1
+             ORDER BY m_order",
+            rusqlite::params![conversation_id]
         )?;
 
         let messages: Vec<Value> = serde_json::from_str(&messages_json)?;
@@ -43,12 +43,18 @@ pub fn execute<'a>(
             },
         ];
 
-        let response = ctx.specialist.execute(ExecutionContext::Background.url(), &Task::Summarization, llm_messages, false).await?;
+        let response = ctx.specialist.execute(
+            ExecutionContext::Background.url(),
+            &Task::Summarization,
+            llm_messages,
+            false
+        ).await?;
+
         let summary = response.content.unwrap_or_default();
 
         ctx.db.execute(
-            "UPDATE task_history SET summary = ?1 WHERE id = ?2",
-            rusqlite::params![summary, th_id]
+            "UPDATE conversations SET summary = ?1 WHERE id = ?2",
+            rusqlite::params![summary, conversation_id]
         )?;
 
         Ok(summary)

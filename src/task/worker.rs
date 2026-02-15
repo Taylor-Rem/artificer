@@ -4,7 +4,7 @@ use tokio::sync::watch;
 use serde_json::Value;
 use crate::memory::Db;
 use crate::services::title::Title;
-use crate::task::background::{summarization, title_generation};
+use crate::task::background::{summarization, title_generation, memory_extraction};
 use crate::task::specialist::Specialist;
 use crate::task::Task;
 
@@ -18,6 +18,7 @@ pub async fn execute(task: &Task, ctx: &JobContext<'_>, args: &Value) -> anyhow:
     match task {
         Task::TitleGeneration => title_generation::execute(ctx, args).await,
         Task::Summarization => summarization::execute(ctx, args).await,
+        Task::MemoryExtraction => memory_extraction::execute(ctx, args).await,
         _ => Err(anyhow::anyhow!("Task not implemented: {:?}", task)),
     }
 }
@@ -141,12 +142,13 @@ impl Worker {
             Err(e) => {
                 let exhausted = self.mark_job_failed(job.id, &e.to_string())?;
                 if exhausted && matches!(job.task, super::Task::TitleGeneration) {
-                    if let Some(th_id) = job.arguments["th_id"].as_i64() {
+                    // Use conversation_id instead of th_id
+                    if let Some(conversation_id) = job.arguments["conversation_id"].as_i64() {
                         let hash = &uuid::Uuid::new_v4().to_string()[..8];
                         let fallback_title = format!("conv_{}", hash);
                         self.db.execute(
-                            "UPDATE task_history SET title = ?1 WHERE id = ?2",
-                            rusqlite::params![fallback_title, th_id]
+                            "UPDATE conversations SET title = ?1 WHERE id = ?2",
+                            rusqlite::params![fallback_title, conversation_id]
                         )?;
                     }
                 }

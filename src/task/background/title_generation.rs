@@ -13,8 +13,8 @@ pub fn execute<'a>(
     args: &'a Value
 ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
     Box::pin(async move {
-        let th_id = args["th_id"].as_i64()
-            .ok_or_else(|| anyhow::anyhow!("Missing task_history_id"))?;
+        let conversation_id = args["conversation_id"].as_i64()
+            .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
         let user_message_val = args.get("user_message")
             .ok_or_else(|| anyhow::anyhow!("Missing message in arguments"))?;
@@ -34,7 +34,13 @@ pub fn execute<'a>(
             message,
         ];
 
-        let response = ctx.specialist.execute(ExecutionContext::Background.url(), &Task::TitleGeneration, messages, false).await?;
+        let response = ctx.specialist.execute(
+            ExecutionContext::Background.url(),
+            &Task::TitleGeneration,
+            messages,
+            false
+        ).await?;
+
         let raw_title = response.content.unwrap_or_default();
         let sanitized = sanitize_title(&raw_title);
 
@@ -49,8 +55,8 @@ pub fn execute<'a>(
         };
 
         ctx.db.execute(
-            "UPDATE task_history SET title = ?1 WHERE id = ?2",
-            rusqlite::params![final_title, th_id]
+            "UPDATE conversations SET title = ?1 WHERE id = ?2",
+            rusqlite::params![final_title, conversation_id]
         )?;
 
         Ok(final_title)

@@ -199,7 +199,7 @@ impl Specialist {
                     }
                 }
 
-                if chunk.done && chunk.message.tool_calls.is_some() {
+                if chunk.message.tool_calls.is_some() {
                     tool_calls = chunk.message.tool_calls.clone();
                 }
             }
@@ -218,7 +218,7 @@ impl Specialist {
                         full_content.push_str(content);
                     }
                 }
-                if chunk.done && chunk.message.tool_calls.is_some() {
+                if chunk.message.tool_calls.is_some() {
                     tool_calls = chunk.message.tool_calls.clone();
                 }
             }

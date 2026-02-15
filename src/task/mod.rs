@@ -3,7 +3,7 @@ pub mod worker;
 pub mod interactive;
 pub mod background;
 mod registry;
-pub mod current_task;
+pub mod conversation;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
@@ -229,36 +229,94 @@ define_tasks! {
 // ============================================================================
 
 impl Task {
-    pub fn build_system_prompt(&self, db: &Db) -> Result<String> {
+    pub fn build_system_prompt(&self, db: &Db, device_id: i64) -> Result<String> {
         let base_instructions = self.instructions();
 
-        // Get task-specific AND general learnings
+        // Get memories for this device and task
         let memories = db.query(
-            "SELECT key, value FROM local_task_data ltd 
-             JOIN tasks t ON ltd.task_id = t.id 
-             WHERE t.title IN (?1, 'general')
-             ORDER BY ltd.updated_at DESC",
-            rusqlite::params![self.title()]
+            "SELECT key, value, memory_type, confidence
+             FROM local_task_data
+             WHERE device_id = ?1
+               AND task_id IN (
+                   SELECT id FROM tasks WHERE title IN (?2, 'general')
+               )
+             ORDER BY
+               CASE memory_type
+                 WHEN 'fact' THEN 1
+                 WHEN 'context' THEN 2
+                 WHEN 'preference' THEN 3
+               END,
+               confidence DESC,
+               updated_at DESC",
+            rusqlite::params![device_id, self.title()]
         )?;
 
-        let memories: Vec<Value> = serde_json::from_str(&memories)?;
+        let memories: Vec<serde_json::Value> = serde_json::from_str(&memories)?;
 
         if memories.is_empty() {
             return Ok(base_instructions.to_string());
         }
 
-        let memory_section = memories.iter()
-            .map(|m| format!("- {}: {}",
-                             m["key"].as_str().unwrap_or(""),
-                             m["value"].as_str().unwrap_or("")))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Separate by type
+        let facts: Vec<_> = memories.iter()
+            .filter(|m| m["memory_type"].as_str() == Some("fact"))
+            .collect();
 
-        Ok(format!(
-            "{}\n\n# Remembered Context\n{}\n",
-            base_instructions,
-            memory_section
-        ))
+        let preferences: Vec<_> = memories.iter()
+            .filter(|m| m["memory_type"].as_str() == Some("preference"))
+            .collect();
+
+        let context: Vec<_> = memories.iter()
+            .filter(|m| m["memory_type"].as_str() == Some("context"))
+            .collect();
+
+        let mut prompt = base_instructions.to_string();
+
+        // Add facts (high confidence, objective)
+        if !facts.is_empty() {
+            prompt.push_str("\n\n# System Information\n");
+            for fact in facts {
+                let key = fact["key"].as_str().unwrap_or("");
+                let value = fact["value"].as_str().unwrap_or("");
+                let confidence = fact["confidence"].as_f64().unwrap_or(1.0);
+
+                // Only include high-confidence facts
+                if confidence >= 0.8 {
+                    prompt.push_str(&format!("- {}: {}\n", key, value));
+                }
+            }
+        }
+
+        // Add context (what user is currently doing)
+        if !context.is_empty() {
+            prompt.push_str("\n# Current Context\n");
+            for ctx in context {
+                let key = ctx["key"].as_str().unwrap_or("");
+                let value = ctx["value"].as_str().unwrap_or("");
+                prompt.push_str(&format!("- {}: {}\n", key, value));
+            }
+        }
+
+        // Add preferences (how user likes things)
+        if !preferences.is_empty() {
+            prompt.push_str("\n# User Preferences\n");
+            for pref in preferences {
+                let key = pref["key"].as_str().unwrap_or("");
+                let value = pref["value"].as_str().unwrap_or("");
+                let confidence = pref["confidence"].as_f64().unwrap_or(0.8);
+
+                // Phrase preferences as preferences, not rules
+                if confidence >= 0.7 {
+                    prompt.push_str(&format!("- User prefers: {} ({})\n", value, key));
+                } else {
+                    prompt.push_str(&format!("- User sometimes prefers: {} ({})\n", value, key));
+                }
+            }
+            prompt.push_str("\nNote: These are preferences, not strict rules. \
+                            Adapt based on the specific request.\n");
+        }
+
+        Ok(prompt)
     }
 
     /// Execute this task with the appropriate execution mode
@@ -284,9 +342,10 @@ impl Task {
         &self,
         user_messages: Vec<Message>,
         db: &Db,
+        device_id: i64,
         streaming: bool,
     ) -> Result<ResponseMessage> {
-        let system_prompt = self.build_system_prompt(db)?;
+        let system_prompt = self.build_system_prompt(db, device_id)?;
 
         let mut messages = vec![Message {
             role: "system".to_string(),
@@ -299,6 +358,7 @@ impl Task {
     }
 
     /// Agentic loop execution: keeps running until no more tool calls
+    /// FIXED: Proper tool result formatting
     async fn execute_agentic_loop(
         &self,
         mut messages: Vec<Message>,
@@ -333,13 +393,11 @@ impl Task {
 
                     println!("[Tool result: {}]", result);
 
-                    // Add tool result to messages
+                    // FIXED: Format tool result properly as assistant message
+                    // Ollama expects tool results as assistant messages, not "tool" role
                     messages.push(Message {
-                        role: "tool".to_string(),
-                        content: Some(json!({
-                            "name": tool_name,
-                            "result": result
-                        }).to_string()),
+                        role: "assistant".to_string(),
+                        content: Some(result),
                         tool_calls: None,
                     });
                 }

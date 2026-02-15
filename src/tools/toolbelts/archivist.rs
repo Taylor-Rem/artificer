@@ -29,11 +29,11 @@ register_toolbelt! {
                 params: []
             },
             "list_conversations" => list_conversations {
-                description: "Lists all conversations with their IDs, titles, and locations",
+                description: "Lists all conversations with their IDs and titles",
                 params: []
             },
             "get_summary" => get_summary {
-                description: "Get the conversations summary",
+                description: "Get the conversation summary by title",
                 params: ["title": "string" => "Title of the conversation to retrieve"]
             },
             "get_conversation" => get_conversation {
@@ -65,7 +65,10 @@ impl Archivist {
     }
 
     fn list_conversations(&self, _args: &serde_json::Value) -> Result<String> {
-        self.db.query("SELECT id, title, location FROM conversation", [])
+        self.db.query(
+            "SELECT id, title, created, last_accessed FROM conversations ORDER BY last_accessed DESC",
+            []
+        )
     }
 
     fn get_summary(&self, args: &serde_json::Value) -> Result<String> {
@@ -74,9 +77,7 @@ impl Archivist {
             return Ok("Error: title cannot be empty".to_string());
         }
         self.db.query(
-            "SELECT summary \
-             FROM conversation \
-             WHERE title = ?1",
+            "SELECT summary FROM conversations WHERE title = ?1",
             rusqlite::params![title],
         )
     }
@@ -92,28 +93,46 @@ impl Archivist {
 
         // First get conversation metadata
         let conv_result = conn.query_row(
-            "SELECT id, title, location FROM conversation WHERE title = ?1",
+            "SELECT id, title FROM conversations WHERE title = ?1",
             rusqlite::params![title],
             |row| {
                 let id: i64 = row.get(0)?;
                 let title: Option<String> = row.get(1)?;
-                let location: String = row.get(2)?;
-                Ok((id, title, location))
+                Ok((id, title))
             },
         );
 
         match conv_result {
-            Ok((conv_id, conv_title, conv_location)) => {
+            Ok((conv_id, conv_title)) => {
                 let mut output = String::new();
 
                 // Add conversation header
                 output.push_str(&format!("title: {}\n", conv_title.unwrap_or("Untitled".to_string())));
-                output.push_str(&format!("location: {}\n", conv_location));
+
+                // Get tasks used in this conversation
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT t.title
+                     FROM task_history th
+                     JOIN tasks t ON th.task_id = t.id
+                     WHERE th.conversation_id = ?1
+                     ORDER BY th.created"
+                )?;
+
+                let tasks: Vec<String> = stmt.query_map(rusqlite::params![conv_id], |row| row.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                if !tasks.is_empty() {
+                    output.push_str(&format!("tasks_used: {}\n", tasks.join(", ")));
+                }
+
                 output.push_str("\nmessages:\n");
 
                 // Get all messages for this conversation
                 let mut stmt = conn.prepare(
-                    "SELECT role, message FROM message WHERE th_id = ?1 ORDER BY \"order\""
+                    "SELECT role, message FROM messages
+                     WHERE conversation_id = ?1
+                     ORDER BY m_order"
                 )?;
 
                 let messages = stmt.query_map(rusqlite::params![conv_id], |row| {
@@ -153,6 +172,4 @@ impl Archivist {
             other => rusqlite::types::Value::Text(other.to_string()),
         }
     }
-
-
 }
