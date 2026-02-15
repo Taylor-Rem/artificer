@@ -15,7 +15,7 @@ impl Title {
         if let Ok(conn) = self.db.lock() {
             let exists: bool = conn
                 .query_row(
-                    "SELECT 1 FROM conversation WHERE title = ?1 LIMIT 1",
+                    "SELECT 1 FROM task_history WHERE title = ?1 LIMIT 1",
                     rusqlite::params![title],
                     |_row| Ok(true),
                 )
