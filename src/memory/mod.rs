@@ -23,8 +23,18 @@ impl Default for Db {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let conn = Connection::open(&db_path).expect("Failed to open database");
+        let mut conn = Connection::open(&db_path).expect("Failed to open database");
+
+        // Set busy timeout - wait up to 5 seconds if database is locked
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .expect("Failed to set busy timeout");
+
+        // Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .expect("Failed to enable foreign keys");
+
         Self::create_tables(&conn).expect("Failed to create tables");
+        Self::populate_tables(&conn).expect("Failed to populate tables");
 
         Self {
             db: Arc::new(Mutex::new(conn)),
@@ -103,71 +113,85 @@ impl Db {
 
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL UNIQUE,
-                description TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            title TEXT NOT NULL UNIQUE,
+            description TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
 
-            CREATE TABLE IF NOT EXISTS task_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id INTEGER NOT NULL,
-                title TEXT UNIQUE,
-                summary TEXT,
-                location TEXT NOT NULL,
-                created INTEGER NOT NULL,
-                last_accessed INTEGER NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(id)
-            );
+        CREATE TABLE IF NOT EXISTS task_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            title TEXT UNIQUE,
+            summary TEXT,
+            location TEXT NOT NULL,
+            created INTEGER NOT NULL,
+            last_accessed INTEGER NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );
 
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_history_id INTEGER,
-                role TEXT NOT NULL,
-                message TEXT NOT NULL,
-                m_order INTEGER NOT NULL,
-                created INTEGER NOT NULL,
-                FOREIGN KEY (task_history_id) REFERENCES task_history(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_task_history_id ON messages(task_history_id);
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_history_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT NOT NULL,
+            m_order INTEGER NOT NULL,
+            created INTEGER NOT NULL,
+            FOREIGN KEY (task_history_id) REFERENCES task_history(id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_history_id ON messages(task_history_id);
 
-            CREATE TABLE IF NOT EXISTS local_task_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id INTEGER NOT NULL,
-                task_history_id INTEGER NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                UNIQUE(task_id, key),
-                FOREIGN KEY (task_id) REFERENCES tasks(id),
-                FOREIGN KEY (task_history_id) REFERENCES task_history(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(task_id);
-            CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(id);
+        CREATE TABLE IF NOT EXISTS local_task_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            task_history_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(task_id, key),
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            FOREIGN KEY (task_history_id) REFERENCES task_history(id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(task_id);
+        CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(id);
 
-            CREATE TABLE IF NOT EXISTS background (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                method TEXT NOT NULL,
-                arguments TEXT NOT NULL,
-                priority INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                started_at INTEGER,
-                completed_at INTEGER,
-                result TEXT,
-                retries INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                context TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
-            CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
-            CREATE INDEX IF NOT EXISTS idx_jobs_created ON background(created_at);
-        ")?;
+        CREATE TABLE IF NOT EXISTS background (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            method TEXT NOT NULL,
+            arguments TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            started_at INTEGER,
+            completed_at INTEGER,
+            result TEXT,
+            retries INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3,
+            context TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_created ON background(created_at);
+    ")?;
         Ok(())
     }
     fn populate_tables(conn: &Connection) -> Result<()> {
-
+        for task in Task::all() {
+            conn.execute(
+                "INSERT OR IGNORE INTO tasks (id, title, description) VALUES (?1, ?2, ?3)",
+                rusqlite::params![task.task_id(), task.title(), task.description()],
+            )?;
+        }
+        Ok(())
     }
 }

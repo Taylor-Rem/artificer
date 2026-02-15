@@ -16,7 +16,7 @@ pub fn execute<'a>(
         let th_id = args["th_id"].as_i64()
             .ok_or_else(|| anyhow::anyhow!("Missing task_history_id"))?;
 
-        let user_message_val = args.get("message")
+        let user_message_val = args.get("user_message")
             .ok_or_else(|| anyhow::anyhow!("Missing message in arguments"))?;
 
         let message = Message {

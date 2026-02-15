@@ -1,5 +1,6 @@
 use anyhow::Result;
 use tokio::time::{sleep, Duration};
+use tokio::sync::watch;
 use serde_json::Value;
 use crate::memory::Db;
 use crate::services::title::Title;
@@ -47,24 +48,67 @@ pub struct Worker {
     db: Db,
     title_service: Title,
     poll_interval: Duration,
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl Worker {
-    pub fn new(poll_interval_secs: u64) -> Self {
+    pub fn new(poll_interval_secs: u64, shutdown_rx: watch::Receiver<bool>) -> Self {
         Self {
             db: Db::default(),
             title_service: Title::default(),
             poll_interval: Duration::from_secs(poll_interval_secs),
+            shutdown_rx,
         }
     }
 
     pub async fn run(&self) -> Result<()> {
         loop {
+            // Check for shutdown signal
+            if *self.shutdown_rx.borrow() {
+                println!("Worker shutting down gracefully...");
+                break;
+            }
+
             if let Err(e) = self.process_next_job().await {
                 eprintln!("Worker error: {}", e);
             }
+
             sleep(self.poll_interval).await;
         }
+
+        Ok(())
+    }
+
+    /// Process all remaining jobs before shutdown
+    pub async fn drain_queue(&self) -> Result<()> {
+        println!("Processing remaining background jobs...");
+
+        loop {
+            let has_pending = self.has_pending_jobs()?;
+            if !has_pending {
+                break;
+            }
+
+            if let Err(e) = self.process_next_job().await {
+                eprintln!("Error during drain: {}", e);
+            }
+
+            // Small delay to avoid tight loop
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        println!("All background jobs completed.");
+        Ok(())
+    }
+
+    fn has_pending_jobs(&self) -> Result<bool> {
+        let conn = self.db.lock()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM background WHERE status IN ('pending', 'running')",
+            [],
+            |row| row.get(0)
+        )?;
+        Ok(count > 0)
     }
 
     async fn process_next_job(&self) -> Result<()> {
@@ -101,7 +145,7 @@ impl Worker {
                         let hash = &uuid::Uuid::new_v4().to_string()[..8];
                         let fallback_title = format!("conv_{}", hash);
                         self.db.execute(
-                            "UPDATE conversations SET title = ?1 WHERE id = ?2",
+                            "UPDATE task_history SET title = ?1 WHERE id = ?2",
                             rusqlite::params![fallback_title, th_id]
                         )?;
                     }
@@ -136,7 +180,6 @@ impl Worker {
         Ok(())
     }
 
-    /// Returns `true` if retries are exhausted (job marked as "failed").
     fn mark_job_failed(&self, job_id: i64, error: &str) -> Result<bool> {
         let conn = self.db.lock()?;
 

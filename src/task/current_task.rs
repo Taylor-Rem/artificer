@@ -16,23 +16,25 @@ impl Default for CurrentTask {
 }
 
 impl CurrentTask {
-    pub async fn init(&self, user_message: Message, location: &str) -> Result<u64> {
-        let th_id = self.create_task_history_entry(location.to_string())?;
+    pub async fn init(&self, user_message: Message, location: &str, current_task: &Task) -> Result<u64> {
+        let th_id = self.create_task_history_entry(location.to_string(), current_task).await?;
 
         let _ = self.create_title(th_id, &user_message);
         Ok(th_id)
     }
 
-    pub fn create_task_history_entry(&self, location: String) -> Result<u64> {
+    pub async fn create_task_history_entry(&self, location: String, current_task: &Task) -> Result<u64> {
         let conn = self.db.lock()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
+        let task_id = current_task.task_id();
+
         conn.execute(
-            "INSERT INTO task_history (location, created, last_accessed) VALUES (?1, ?2, ?3)",
-            rusqlite::params![location, now, now],
+            "INSERT INTO task_history (task_id, location, created, last_accessed) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![task_id, location, now, now],
         )?;
 
         Ok(conn.last_insert_rowid() as u64)
@@ -48,7 +50,7 @@ impl CurrentTask {
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO messages (th_id, role, message, \"order\", created) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO messages (task_history_id, role, message, m_order, created) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![th_id as i64, role, message, *message_count as i64, now],
         )?;
 
