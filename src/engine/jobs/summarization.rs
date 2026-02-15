@@ -28,7 +28,7 @@ pub fn execute<'a>(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let summary = ctx.helper.summarize(&text).await?;
+        let summary = ctx.agent.summarize(&text).await?;
 
         ctx.db.execute(
             "UPDATE conversation SET summary = ?1 WHERE id = ?2",

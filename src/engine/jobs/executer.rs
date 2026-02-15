@@ -1,5 +1,5 @@
 use serde_json::Value;
-use crate::agents::helper::Helper;
+use crate::agent::Agent;
 use crate::engine::db::Db;
 use crate::engine::jobs::{summarization, title_generation};
 use crate::schema::Task;
@@ -7,7 +7,7 @@ use crate::services::title::Title;
 
 pub struct JobContext<'a> {
     pub db: &'a Db,
-    pub helper: &'a Helper,
+    pub agent: &'a Agent,
     pub title_service: &'a Title,
 }
 

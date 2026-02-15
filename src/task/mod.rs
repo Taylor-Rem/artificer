@@ -3,19 +3,11 @@ use anyhow::Result;
 use serde_json::Value;
 use crate::engine::db::Db;
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TaskType {
-    Helper,
-    Specialist,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Task {
-    // Helper tasks
     TitleGeneration,
     Summarization,
     Translation,
     Extraction,
-
-    // Specialist tasks
     Chat,
     CodeReview,
     Research,
@@ -34,20 +26,6 @@ impl Task {
             "research" => Some(Task::Research),
             "memory_extraction" => Some(Task::MemoryExtraction),
             _ => None,
-        }
-    }
-
-    pub fn task_type(&self) -> TaskType {
-        match self {
-            Task::TitleGeneration
-            | Task::Summarization
-            | Task::Translation
-            | Task::Extraction => TaskType::Helper,
-
-            Task::Chat
-            | Task::CodeReview
-            | Task::Research
-            | Task::MemoryExtraction => TaskType::Specialist
         }
     }
 
@@ -95,7 +73,7 @@ impl Task {
             Task::Research =>
                 "Research the given topic thoroughly. Provide well-sourced information, \
                  consider multiple perspectives, and organize findings clearly.",
-            
+
             Task::MemoryExtraction =>
                 "Review this conversation and extract key factual information that would be \
                  useful to remember for future sessions. Focus on:\n\

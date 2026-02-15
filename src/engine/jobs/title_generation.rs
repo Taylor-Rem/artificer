@@ -24,7 +24,7 @@ pub fn execute<'a>(
             tool_calls: None,
         };
 
-        let raw_title = ctx.helper.create_title(&message).await?;
+        let raw_title = ctx.agent.create_title(&message).await?;
         let sanitized = sanitize_title(&raw_title);
 
         if sanitized.is_empty() {
