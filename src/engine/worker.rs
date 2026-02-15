@@ -3,13 +3,13 @@ use tokio::time::{sleep, Duration};
 use serde_json::Value;
 use crate::engine::db::Db;
 use crate::engine::jobs::{self, JobContext};
-use crate::agents::helper::Helper;
+use crate::agent::{Agent, Strength, Capability};
 use crate::services::title::Title;
 use crate::schema::Task;
 
 pub struct Worker {
     db: Db,
-    helper: Helper,
+    agent: Agent,
     title_service: Title,
     poll_interval: Duration,
 }
@@ -40,7 +40,7 @@ impl Worker {
     pub fn new(poll_interval_secs: u64) -> Self {
         Self {
             db: Db::default(),
-            helper: Helper,
+            agent: Agent::new(Strength::Speed, Capability::Quick),
             title_service: Title::default(),
             poll_interval: Duration::from_secs(poll_interval_secs),
         }
@@ -73,7 +73,7 @@ impl Worker {
 
         let ctx = JobContext {
             db: &self.db,
-            helper: &self.helper,
+            agent: &self.agent,
             title_service: &self.title_service,
         };
 
@@ -88,7 +88,7 @@ impl Worker {
                         let hash = &uuid::Uuid::new_v4().to_string()[..8];
                         let fallback_title = format!("conv_{}", hash);
                         self.db.execute(
-                            "UPDATE conversation SET title = ?1 WHERE id = ?2",
+                            "UPDATE conversations SET title = ?1 WHERE id = ?2",
                             rusqlite::params![fallback_title, conversation_id]
                         )?;
                     }

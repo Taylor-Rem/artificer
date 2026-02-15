@@ -109,7 +109,7 @@ impl Db {
                 created INTEGER NOT NULL,
                 last_accessed INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_title ON conversation(title);
+            CREATE INDEX IF NOT EXISTS idx_title ON conversations(title);
 
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +119,7 @@ impl Db {
                 \"order\" INTEGER NOT NULL,
                 created INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_conversation_id ON message(conversation_id);
+            CREATE INDEX IF NOT EXISTS idx_conversation_id ON messages(conversation_id);
 
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +148,7 @@ impl Db {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(task_name, key)
             );
-            CREATE INDEX idx_task_memory_task ON task_memory(task_name);
+            CREATE INDEX IF NOT EXISTS idx_task_memory_task ON task_memory(task_name);
         ")?;
         Ok(())
     }

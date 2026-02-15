@@ -31,7 +31,7 @@ impl Conversation {
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO conversation (location, created, last_accessed) VALUES (?1, ?2, ?3)",
+            "INSERT INTO conversations (location, created, last_accessed) VALUES (?1, ?2, ?3)",
             rusqlite::params![location, now, now],
         )?;
 
@@ -48,7 +48,7 @@ impl Conversation {
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO message (conversation_id, role, message, \"order\", created) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO messages (conversation_id, role, message, \"order\", created) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![conv_id as i64, role, message, *message_count as i64, now],
         )?;
 

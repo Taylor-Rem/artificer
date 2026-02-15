@@ -18,7 +18,7 @@ impl Default for FileSmith {
 
 register_toolbelt! {
     FileSmith {
-        description: "Tool for interacting with files and directories and performing related tasks",
+        description: "Tool for interacting with files and directories and performing related task",
         tools: {
             "read_file" => read_file {
                 description: "Reads the entire contents of a file and returns it as a string",

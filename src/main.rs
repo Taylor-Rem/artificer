@@ -4,22 +4,20 @@ use std::io::{self, Write};
 
 use artificer::Message;
 use artificer::engine::registry;
-use artificer::schema::{Agent, ToolCaller};
-use artificer::agents::artificer::Artificer;
+use artificer::agent::{Agent, Strength, Capability};
 use artificer::engine::worker::Worker;
 use artificer::services::conversation::Conversation;
 use artificer::schema::Task;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let artificer = Artificer;
-    let conversation = Conversation::default();
     let worker = Worker::new(2);
     tokio::spawn(async move {
         if let Err(e) = worker.run().await {
             eprintln!("Worker crashed: {}", e);
         }
     });
+    let task = Task::Chat;
     let tools = registry::get_tools();
 
     let mut messages = vec![Message {
@@ -29,12 +27,12 @@ async fn main() -> Result<()> {
     }];
     let mut conversation_id: Option<u64> = None;
     let mut first_loop = true;
+    let mut message_count = 0;
 
     println!("Artificer is ready. Type 'quit' to exit.\n");
     println!("Available tools: {}", tools.iter().map(|t| t.function.name.as_str()).collect::<Vec<_>>().join(", "));
-    println!();
-
-    let mut message_count = 0;
+    println!(); 
+    
     loop {
         let input = wait_for_user_input()?;
         if input.eq_ignore_ascii_case("quit") {
@@ -72,7 +70,7 @@ async fn main() -> Result<()> {
 
         // Chat loop - handles tool calls until we get a final response
         loop {
-            let response = artificer.make_request(&messages, Some(tools.clone())).await?;
+            let response = artificer.make_request_streaming(&messages, Some(tools.clone())).await?;
 
             // Add assistant message to history
             messages.push(response.to_message());
@@ -85,7 +83,7 @@ async fn main() -> Result<()> {
 
                     println!("[Calling tool: {} with args: {}]", tool_name, args);
 
-                    let result = artificer.use_tool(tool_name, args)
+                    let result = registry::use_tool(tool_name, args)
                         .unwrap_or_else(|e| format!("Error: {}", e));
 
                     println!("[Tool result: {}]", result);
@@ -110,7 +108,7 @@ async fn main() -> Result<()> {
                         eprintln!("   Error: {}", e);
                     }
                 }
-                println!("\nArtificer: {}\n", content);
+                println!("\n");
                 break;
             }
         }
