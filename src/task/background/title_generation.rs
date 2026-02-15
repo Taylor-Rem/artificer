@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use super::JobContext;
+use crate::task::worker::JobContext;
+use crate::task::specialist::ExecutionContext;
 use crate::Message;
 use crate::services::title::sanitize_title;
 use crate::task::Task;
@@ -33,7 +34,7 @@ pub fn execute<'a>(
             message,
         ];
 
-        let response = ctx.specialist.execute(messages, false).await?;
+        let response = ctx.specialist.execute(ExecutionContext::Background.url(), messages, false).await?;
         let raw_title = response.content.unwrap_or_default();
         let sanitized = sanitize_title(&raw_title);
 

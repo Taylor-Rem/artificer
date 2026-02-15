@@ -4,8 +4,9 @@ use std::io::{self, Write};
 
 use artificer::Message;
 use artificer::tools::registry;
-use artificer::task::async_executer::Worker;
+use artificer::task::worker::Worker;
 use artificer::task::Task;
+use artificer::task::specialist::ExecutionContext;
 use artificer::services::conversation::Conversation;
 
 #[tokio::main]
@@ -73,7 +74,7 @@ async fn main() -> Result<()> {
 
         // Chat loop - handles tool calls until we get a final response
         loop {
-            let response = specialist.execute(messages.clone(), true).await?;
+            let response = specialist.execute(ExecutionContext::Interactive.url(), messages.clone(), true).await?;
 
             // Add assistant message to history
             messages.push(response.to_message());

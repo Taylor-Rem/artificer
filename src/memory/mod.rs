@@ -88,7 +88,7 @@ impl Db {
             .as_secs() as i64;
 
         conn.execute(
-            "INSERT INTO jobs (method, arguments, priority, status, created_at)
+            "INSERT INTO background (method, arguments, priority, status, created_at)
                      VALUES (?1, ?2, ?3, 'pending', ?4)",
                         rusqlite::params![
                         task.title(),
@@ -103,27 +103,51 @@ impl Db {
 
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute_batch("
-            CREATE TABLE IF NOT EXISTS conversations (
+            CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
+                title TEXT NOT NULL UNIQUE,  -- 'chat', 'research', 'code_review', 'general'
+                description TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_title ON tasks(title);
+
+            CREATE TABLE executed_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                title TEXT UNIQUE,
                 summary TEXT,
                 location TEXT NOT NULL,
                 created INTEGER NOT NULL,
-                last_accessed INTEGER NOT NULL
+                last_accessed INTEGER NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_title ON conversations(title);
 
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id INTEGER,
+                executed_task_id INTEGER,
                 role TEXT NOT NULL,
                 message TEXT NOT NULL,
-                \"order\" INTEGER NOT NULL,
+                m_order INTEGER NOT NULL,
                 created INTEGER NOT NULL
+                FOREIGN KEY (executed_task_id) REFERENCES executed_tasks(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_conversation_id ON messages(conversation_id);
+            CREATE INDEX IF NOT EXISTS idx_executed_task_id ON messages(executed_task_id);
 
-            CREATE TABLE IF NOT EXISTS jobs (
+            CREATE TABLE local_task_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                executed_task_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(task_id, key),
+                FOREIGN KEY (task_id) REFERENCES tasks(id),
+                FOREIGN KEY (executed_task_id) REFERENCES executed_tasks(id)
+            );
+            CREATE INDEX idx_local_task_data_task ON local_task_data(task_id);
+            CREATE INDEX idx_executed_tasks_task ON executed_tasks(task_id);
+
+            CREATE TABLE IF NOT EXISTS background (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 method TEXT NOT NULL,
                 arguments TEXT NOT NULL,
@@ -137,20 +161,9 @@ impl Db {
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 context TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-            CREATE INDEX IF NOT EXISTS idx_jobs_priority ON jobs(priority DESC);
-            CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
-
-            CREATE TABLE IF NOT EXISTS task_memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_name TEXT NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                UNIQUE(task_name, key)
-            );
-            CREATE INDEX IF NOT EXISTS idx_task_memory_task ON task_memory(task_name);
+            CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_created ON background(created_at);
         ")?;
         Ok(())
     }

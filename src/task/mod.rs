@@ -1,12 +1,25 @@
+// src/task/mod.rs
 pub mod specialist;
-pub mod async_executer;
-pub mod tasks;
+pub mod worker;
+pub mod interactive;
+pub mod background;
+mod registry;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use crate::memory::Db;
-use specialist::Specialist;
+use crate::Message;
+use crate::tools::registry as tool_registry;
+use specialist::{Specialist, ExecutionContext, ResponseMessage};
+
+#[derive(Debug, Clone)]
+pub enum TaskType {
+    /// Single execution, return immediately
+    Singular,
+    /// Agentic loop, handle tool calls until completion
+    AgenticLoop,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Task {
@@ -48,16 +61,52 @@ impl Task {
         }
     }
 
+    pub fn task_id(&self) -> i64 {
+        // Map to database tasks table
+        // 1 = general, 2 = chat, 3 = research, 4 = code_review
+        match self {
+            Task::Chat => 2,
+            Task::Research => 3,
+            Task::CodeReview => 4,
+            // Background jobs use general
+            Task::TitleGeneration
+            | Task::Summarization
+            | Task::Translation
+            | Task::Extraction
+            | Task::MemoryExtraction => 1,
+        }
+    }
+
     pub fn specialist(&self) -> Specialist {
         match self {
-            Task::TitleGeneration => Specialist::SpeedReasoner,
-            Task::Summarization => Specialist::SpeedReasoner,
-            Task::Translation => Specialist::SpeedReasoner,
-            Task::Extraction => Specialist::SpeedReasoner,
-            Task::Chat => Specialist::PowerToolCaller,
-            Task::CodeReview => Specialist::PowerCoder,
-            Task::Research => Specialist::PowerReasoner,
-            Task::MemoryExtraction => Specialist::SpeedReasoner,
+            Task::TitleGeneration => Specialist::Quick,
+            Task::Summarization => Specialist::Quick,
+            Task::Translation => Specialist::Quick,
+            Task::Extraction => Specialist::Quick,
+            Task::Chat => Specialist::ToolCaller,
+            Task::CodeReview => Specialist::Coder,
+            Task::Research => Specialist::Reasoner,
+            Task::MemoryExtraction => Specialist::Quick,
+        }
+    }
+
+    pub fn execution_context(&self) -> ExecutionContext {
+        match self {
+            // Interactive tasks run on P40
+            Task::Chat | Task::Research | Task::CodeReview => ExecutionContext::Interactive,
+            // Background jobs run on 3070
+            Task::TitleGeneration
+            | Task::Summarization
+            | Task::Translation
+            | Task::Extraction
+            | Task::MemoryExtraction => ExecutionContext::Background,
+        }
+    }
+
+    pub fn task_type(&self) -> TaskType {
+        match self {
+            Task::Chat | Task::Research => TaskType::AgenticLoop,
+            _ => TaskType::Singular,
         }
     }
 
@@ -106,12 +155,16 @@ impl Task {
                  Only extract facts that will remain true across sessions. Ignore ephemeral details.",
         }
     }
+
     pub fn build_system_prompt(&self, db: &Db) -> Result<String> {
         let base_instructions = self.instructions();
 
-        // Get task-specific memory
+        // Get task-specific AND general learnings
         let memories = db.query(
-            "SELECT key, value FROM task_memory WHERE task_name = ?1",
+            "SELECT key, value FROM local_task_data ltd 
+             JOIN tasks t ON ltd.task_id = t.id 
+             WHERE t.title IN (?1, 'general')
+             ORDER BY ltd.updated_at DESC",
             rusqlite::params![self.title()]
         )?;
 
@@ -121,7 +174,6 @@ impl Task {
             return Ok(base_instructions.to_string());
         }
 
-        // Build memory section
         let memory_section = memories.iter()
             .map(|m| format!("- {}: {}",
                              m["key"].as_str().unwrap_or(""),
@@ -134,5 +186,97 @@ impl Task {
             base_instructions,
             memory_section
         ))
+    }
+
+    /// Execute this task with the appropriate execution mode
+    pub async fn execute(
+        &self,
+        messages: Vec<Message>,
+        streaming: bool,
+    ) -> Result<ResponseMessage> {
+        match self.task_type() {
+            TaskType::Singular => {
+                // Simple one-shot execution
+                let specialist = self.specialist();
+                let url = self.execution_context().url();
+                specialist.execute(url, messages, streaming).await
+            }
+            TaskType::AgenticLoop => {
+                // Agentic loop: handle tool calls until completion
+                self.execute_agentic_loop(messages, streaming).await
+            }
+        }
+    }
+
+    /// Execute with system prompt automatically added
+    pub async fn execute_with_prompt(
+        &self,
+        user_messages: Vec<Message>,
+        db: &Db,
+        streaming: bool,
+    ) -> Result<ResponseMessage> {
+        let system_prompt = self.build_system_prompt(db)?;
+
+        let mut messages = vec![Message {
+            role: "system".to_string(),
+            content: Some(system_prompt),
+            tool_calls: None,
+        }];
+        messages.extend(user_messages);
+
+        self.execute(messages, streaming).await
+    }
+
+    /// Agentic loop execution: keeps running until no more tool calls
+    async fn execute_agentic_loop(
+        &self,
+        mut messages: Vec<Message>,
+        streaming: bool,
+    ) -> Result<ResponseMessage> {
+        let specialist = self.specialist();
+        let url = self.execution_context().url();
+
+        loop {
+            let response = specialist.execute(url, messages.clone(), streaming).await?;
+
+            // Add assistant response to history
+            messages.push(response.to_message());
+
+            // Check if there are tool calls to process
+            if let Some(tool_calls) = &response.tool_calls {
+                for tool_call in tool_calls {
+                    let tool_name = &tool_call.function.name;
+                    let args = &tool_call.function.arguments;
+
+                    println!("[Calling tool: {} with args: {}]", tool_name, args);
+
+                    // Check if this is a task switch
+                    if tool_name == "switch_task" {
+                        // Handle task switching - for now just log it
+                        println!("[Task switch requested - not yet implemented]");
+                        continue;
+                    }
+
+                    let result = tool_registry::use_tool(tool_name, args)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+
+                    println!("[Tool result: {}]", result);
+
+                    // Add tool result to messages
+                    messages.push(Message {
+                        role: "tool".to_string(),
+                        content: Some(json!({
+                            "name": tool_name,
+                            "result": result
+                        }).to_string()),
+                        tool_calls: None,
+                    });
+                }
+                // Continue loop to process tool results
+            } else {
+                // No tool calls - we're done
+                return Ok(response);
+            }
+        }
     }
 }

@@ -53,6 +53,16 @@ pub fn get_tools_for(prefixes: &[&str]) -> Vec<Tool> {
         .collect()
 }
 
+pub fn get_tools_for_specialist(specialist: &crate::task::specialist::Specialist) -> Vec<Tool> {
+    use crate::task::specialist::Specialist;
+
+    match specialist {
+        Specialist::ToolCaller => get_tools(), // All tools
+        Specialist::Coder => get_tools_for(&["FileSmith"]),
+        Specialist::Reasoner | Specialist::Quick => vec![], // No tools
+    }
+}
+
 #[macro_export]
 macro_rules! register_toolbelt {
     (

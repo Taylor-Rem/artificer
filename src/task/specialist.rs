@@ -1,3 +1,4 @@
+// src/task/specialist.rs
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use anyhow::Result;
@@ -7,6 +8,7 @@ use std::io::{self, Write};
 
 use crate::Message;
 use crate::tools::Tool;
+use crate::task::Task;
 
 #[derive(Serialize)]
 pub struct ChatRequest {
@@ -58,71 +60,57 @@ struct StreamChunk {
     done: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum ExecutionContext {
+    Interactive,
+    Background,
+}
+
+impl ExecutionContext {
+    pub fn url(&self) -> &'static str {
+        match self {
+            ExecutionContext::Interactive => "http://localhost:11435/api/chat",
+            ExecutionContext::Background => "http://localhost:11434/api/chat",
+        }
+    }
+}
+
 pub enum Specialist {
-    PowerToolCaller,
-    PowerReasoner,
-    PowerQuick,
-    PowerCoder,
-    SpeedToolCaller,
-    SpeedReasoner,
-    SpeedQuick,
-    SpeedCoder,
+    ToolCaller,
+    Reasoner,
+    Quick,
+    Coder,
 }
 
 impl Specialist {
-    pub fn url(&self) -> &'static str {
-        match self {
-            Specialist::PowerToolCaller
-            | Specialist::PowerReasoner
-            | Specialist::PowerQuick
-            | Specialist::PowerCoder => "http://localhost:11435/api/chat",
-
-            Specialist::SpeedToolCaller
-            | Specialist::SpeedReasoner
-            | Specialist::SpeedQuick
-            | Specialist::SpeedCoder => "http://localhost:11434/api/chat",
-        }
-    }
-
     pub fn model(&self) -> &'static str {
         match self {
-            Specialist::PowerToolCaller => "qwen3:32b",
-            Specialist::PowerReasoner => "qwen3:32b",
-            Specialist::PowerQuick => "qwen3:8b",
-            Specialist::PowerCoder => "qwen3:32b",
-
-            Specialist::SpeedToolCaller => "qwen3:8b",
-            Specialist::SpeedReasoner => "qwen3:8b",
-            Specialist::SpeedQuick => "qwen3:8b",
-            Specialist::SpeedCoder => "qwen3:8b",
+            Specialist::Quick => "qwen3:8b",
+            Specialist::ToolCaller | Specialist::Reasoner | Specialist::Coder => "qwen3:32b",
         }
     }
 
-    pub fn tools(&self) -> Vec<Tool> {
-        use crate::tools::registry;
+    pub fn tools(&self, current_task: &Task) -> Vec<Tool> {
+        use crate::tools::registry as tool_registry;
+        use crate::task::registry as task_registry;
 
-        match self {
-            // Full toolbelt for chat/research
-            Specialist::PowerToolCaller => registry::get_tools(),
+        let mut tools = match self {
+            Specialist::ToolCaller => tool_registry::get_tools(),
+            Specialist::Coder => tool_registry::get_tools_for(&["FileSmith"]),
+            Specialist::Reasoner | Specialist::Quick => vec![],
+        };
 
-            // Task selector gets only the task selection tool
-            Specialist::PowerQuick => registry::get_tools_for(&["TaskSelector::select_task"]),
-
-            // No tools for pure reasoning/generation tasks
-            Specialist::PowerReasoner
-            | Specialist::SpeedReasoner
-            | Specialist::SpeedQuick => vec![],
-
-            // Coder gets file manipulation tools only
-            Specialist::PowerCoder
-            | Specialist::SpeedCoder => registry::get_tools_for(&["FileSmith"]),
-
-            Specialist::SpeedToolCaller => registry::get_tools(),
+        // Add task switching capability if this is an interactive task
+        if matches!(current_task.execution_context(), ExecutionContext::Interactive) {
+            tools.extend(task_registry::get_available_tasks(current_task));
         }
+
+        tools
     }
 
     pub async fn execute(
         &self,
+        url: &str,
         messages: Vec<Message>,
         streaming: bool,
     ) -> Result<ResponseMessage> {
@@ -130,14 +118,15 @@ impl Specialist {
         let tools_option = if tools.is_empty() { None } else { Some(tools) };
 
         if streaming {
-            self.execute_streaming(messages, tools_option).await
+            self.execute_streaming(url, messages, tools_option).await
         } else {
-            self.execute_standard(messages, tools_option).await
+            self.execute_standard(url, messages, tools_option).await
         }
     }
 
     async fn execute_standard(
         &self,
+        url: &str,
         messages: Vec<Message>,
         tools: Option<Vec<Tool>>,
     ) -> Result<ResponseMessage> {
@@ -150,7 +139,7 @@ impl Specialist {
         };
 
         let response = client
-            .post(self.url())
+            .post(url)
             .json(&request)
             .send()
             .await?
@@ -162,6 +151,7 @@ impl Specialist {
 
     async fn execute_streaming(
         &self,
+        url: &str,
         messages: Vec<Message>,
         tools: Option<Vec<Tool>>,
     ) -> Result<ResponseMessage> {
@@ -174,7 +164,7 @@ impl Specialist {
         };
 
         let response = client
-            .post(self.url())
+            .post(url)
             .json(&request)
             .send()
             .await?;
