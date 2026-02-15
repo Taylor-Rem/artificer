@@ -17,7 +17,7 @@ pub fn execute<'a>(
 
         let messages_json = ctx.db.query(
             "SELECT role, message FROM messages
-             WHERE th_id = ?1
+             WHERE task_history_id = ?1
              ORDER BY \"order\"",
             rusqlite::params![th_id]
         )?;

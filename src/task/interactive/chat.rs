@@ -5,10 +5,21 @@ use crate::Message;
 use crate::memory::Db;
 use crate::task::current_task::CurrentTask;
 use crate::task::Task;
+use crate::state::AppState;
 
-pub async fn execute() -> Result<()> {
+pub async fn execute(state: AppState) -> Result<()> {
     let db = Db::default();
     let conversation = CurrentTask::default();
+    let current_task = state.current_task().await;
+
+    // Preload model into VRAM
+    println!("Loading model into memory...");
+    if let Err(e) = preload_model(&current_task, &db).await {
+        eprintln!("Warning: Failed to preload model: {}", e);
+        eprintln!("First response may be slower.");
+    } else {
+        println!("Model loaded. Ready!\n");
+    }
 
     let mut th_id: Option<u64> = None;
     let mut first_interaction = true;
@@ -47,7 +58,7 @@ pub async fn execute() -> Result<()> {
         // Initialize conversation on first message
         if first_interaction {
             first_interaction = false;
-            match conversation.init(user_message.clone(), "").await {
+            match conversation.init(user_message.clone(), "", &current_task).await {
                 Ok(id) => th_id = Some(id),
                 Err(e) => {
                     eprintln!("Warning: Failed to create conversation - history will not be saved.");
@@ -71,7 +82,7 @@ pub async fn execute() -> Result<()> {
         messages.push(user_message);
 
         // Execute chat task with agentic loop
-        let response = Task::Chat
+        let response = current_task
             .execute_with_prompt(messages.clone(), &db, true)
             .await?;
 
@@ -94,6 +105,27 @@ pub async fn execute() -> Result<()> {
 
         println!("\n");
     }
+
+    Ok(())
+}
+
+async fn preload_model(task: &Task, db: &Db) -> Result<()> {
+    // Create a minimal message to load the model
+    let warmup_messages = vec![
+        Message {
+            role: "system".to_string(),
+            content: Some(task.instructions().to_string()),
+            tool_calls: None,
+        },
+        Message {
+            role: "user".to_string(),
+            content: Some(".".to_string()),
+            tool_calls: None,
+        },
+    ];
+
+    // Execute with streaming=false to avoid printing the response
+    let _ = task.execute(warmup_messages, false).await?;
 
     Ok(())
 }
