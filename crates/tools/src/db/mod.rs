@@ -14,13 +14,8 @@ pub struct Db {
 
 impl Default for Db {
     fn default() -> Self {
-        let db_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".artificer")
-            .join("crates")
-            .join("tools")
-            .join("src")
-            .join("db")
+        let db_path = std::env::current_dir()
+            .expect("Could not get current directory")
             .join("memory.db");
 
         if let Some(parent) = db_path.parent() {

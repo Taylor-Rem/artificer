@@ -41,10 +41,26 @@ impl Conversation {
             .unwrap()
             .as_secs() as i64;
 
+        // Check if device exists
+        let device_exists: bool = conn.query_row(
+            "SELECT 1 FROM devices WHERE id = ?1",
+            rusqlite::params![self.device_id],
+            |_| Ok(true)
+        ).unwrap_or(false);
+
+        if !device_exists {
+            return Err(anyhow::anyhow!(
+            "Device {} does not exist. Device must be registered before creating conversations.",
+            self.device_id
+        ));
+        }
+
         conn.execute(
             "INSERT INTO conversations (device_id, created, last_accessed) VALUES (?1, ?2, ?3)",
             rusqlite::params![self.device_id, now, now],
-        )?;
+        ).map_err(|e| {
+            anyhow::anyhow!("Failed to create conversation for device {}: {}", self.device_id, e)
+        })?;
 
         Ok(conn.last_insert_rowid() as u64)
     }

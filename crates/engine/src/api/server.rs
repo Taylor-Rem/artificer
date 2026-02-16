@@ -8,7 +8,7 @@ use super::routes::create_router;
 pub async fn start_server(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
     let db = Arc::new(Db::default());
 
-    let app = create_router()
+    let app = create_router(db.clone())
         .with_state(db);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;

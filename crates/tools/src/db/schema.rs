@@ -7,11 +7,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_name TEXT NOT NULL UNIQUE,
+            device_key TEXT NOT NULL UNIQUE,
             created INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
             metadata TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(device_name);
+        CREATE INDEX IF NOT EXISTS idx_devices_key ON devices(device_key);
 
         -- Task definitions (global - same across all devices)
         CREATE TABLE IF NOT EXISTS tasks (
