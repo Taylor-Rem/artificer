@@ -69,4 +69,53 @@ impl ApiClient {
 
         Ok(device_id)
     }
+    pub async fn queue_summarization(
+        &self,
+        device_id: i64,
+        conversation_id: u64,
+    ) -> Result<u64> {
+        let url = format!("{}/jobs/summarize", self.base_url);
+
+        let response = self.client
+            .post(&url)
+            .json(&serde_json::json!({
+                "device_id": device_id,
+                "conversation_id": conversation_id
+            }))
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        let job_id = response["job_id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Invalid job_id in response"))?;
+
+        Ok(job_id)
+    }
+
+    pub async fn queue_memory_extraction(
+        &self,
+        device_id: i64,
+        conversation_id: u64,
+    ) -> Result<u64> {
+        let url = format!("{}/jobs/extract_memory", self.base_url);
+
+        let response = self.client
+            .post(&url)
+            .json(&serde_json::json!({
+                "device_id": device_id,
+                "conversation_id": conversation_id
+            }))
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        let job_id = response["job_id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Invalid job_id in response"))?;
+
+        Ok(job_id)
+    }
 }

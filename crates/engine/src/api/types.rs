@@ -38,3 +38,8 @@ pub struct ConversationInfo {
 pub struct ListConversationsResponse {
     pub conversations: Vec<ConversationInfo>,
 }
+#[derive(Deserialize)]
+pub struct QueueJobRequest {
+    pub device_id: i64,
+    pub conversation_id: u64,
+}
