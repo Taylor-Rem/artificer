@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub device_id: i64,
+    pub device_key: String,
     pub conversation_id: Option<u64>,
     pub message: String,
 }
@@ -23,6 +24,7 @@ pub struct RegisterDeviceRequest {
 #[derive(Serialize)]
 pub struct RegisterDeviceResponse {
     pub device_id: i64,
+    pub device_key: String,
 }
 
 // Conversation listing
@@ -41,5 +43,6 @@ pub struct ListConversationsResponse {
 #[derive(Deserialize)]
 pub struct QueueJobRequest {
     pub device_id: i64,
+    pub device_key: String,
     pub conversation_id: u64,
 }

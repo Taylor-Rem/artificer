@@ -7,6 +7,7 @@ pub struct Config {
     pub server_url: String,
     pub device_name: String,
     pub device_id: Option<i64>,
+    pub device_key: Option<String>
 }
 
 impl Default for Config {
@@ -15,6 +16,7 @@ impl Default for Config {
             server_url: "http://localhost:8080".to_string(),
             device_name: get_hostname(),
             device_id: None,
+            device_key: None,
         }
     }
 }
@@ -48,6 +50,12 @@ impl Config {
 
     pub fn set_device_id(&mut self, device_id: i64) -> Result<()> {
         self.device_id = Some(device_id);
+        self.save()
+    }
+
+    pub fn set_device_credentials(&mut self, device_id: i64, device_key: String) -> Result<()> {
+        self.device_id = Some(device_id);
+        self.device_key = Some(device_key);
         self.save()
     }
 

@@ -19,6 +19,7 @@ dependencies = [
  "http",
  "once_cell",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

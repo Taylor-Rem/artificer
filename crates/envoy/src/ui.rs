@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::io::{self, Write};
 use crate::client::ApiClient;
 
-pub async fn interactive_chat(client: ApiClient, device_id: i64) -> Result<()> {
+pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: String) -> Result<()> {
     println!("Envoy chat started. Type 'quit' to exit.\n");
 
     let mut conversation_id: Option<u64> = None;
@@ -32,7 +32,7 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64) -> Result<()> {
         }
 
         // Send to artificer
-        match client.chat(device_id, conversation_id, input.to_string()).await {
+        match client.chat(device_id, device_key.clone(), conversation_id, input.to_string()).await {
             Ok(response) => {
                 conversation_id = Some(response.conversation_id);
                 println!("\nAssistant: {}\n", response.content);
@@ -45,8 +45,8 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn single_message(client: ApiClient, device_id: i64, message: String) -> Result<()> {
-    match client.chat(device_id, None, message).await {
+pub async fn single_message(client: ApiClient, device_id: i64, device_key: String, message: String) -> Result<()> {
+    match client.chat(device_id, device_key, None, message).await {
         Ok(response) => {
             println!("{}", response.content);
         }

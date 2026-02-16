@@ -24,15 +24,15 @@ async fn main() -> Result<()> {
     let client = ApiClient::new(config.server_url.clone());
 
     // Register device if needed
-    let device_id = match config.device_id {
-        Some(id) => id,
-        None => {
+    let (device_id, device_key) = match (config.device_id, config.device_key.clone()) {
+        (Some(id), Some(key)) => (id, key),
+        _ => {
             println!("Registering device '{}'...", config.device_name);
             match client.register_device(config.device_name.clone()).await {
-                Ok(id) => {
-                    config.set_device_id(id)?;
+                Ok((id, key)) => {
+                    config.set_device_credentials(id, key.clone())?;
                     println!("Device registered with ID: {}\n", id);
-                    id
+                    (id, key)
                 }
                 Err(e) => {
                     eprintln!("Failed to connect to Artificer at {}: {}", config.server_url, e);
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
                     return Err(e);
                 }
             }
-        }   
+        }
     };
 
     // Handle commands — default to chat if no args
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
     match command {
         "chat" => {
-            ui::interactive_chat(client, device_id).await?;
+            ui::interactive_chat(client, device_id, device_key.clone()).await?;
         }
         "config" => {
             if args.len() < 3 {
@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
         }
         message => {
             // Treat any other argument as a message
-            ui::single_message(client, device_id, message.to_string()).await?;
+            ui::single_message(client, device_id, device_key.clone(), message.to_string()).await?;
         }
     }
 

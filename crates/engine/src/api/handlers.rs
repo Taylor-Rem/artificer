@@ -97,34 +97,44 @@ pub async fn handle_register_device(
         .unwrap()
         .as_secs() as i64;
 
-    // Check if device exists
+    // Check if device exists by name
     match conn.query_row(
-        "SELECT id FROM devices WHERE device_name = ?1",
+        "SELECT id, device_key FROM devices WHERE device_name = ?1",
         rusqlite::params![req.device_name],
-        |row| row.get(0),
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
     ) {
-        Ok(device_id) => {
+        Ok((device_id, device_key)) => {
             // Update last_seen
             let _ = conn.execute(
                 "UPDATE devices SET last_seen = ?1 WHERE id = ?2",
                 rusqlite::params![now, device_id],
             );
 
-            (StatusCode::OK, Json(serde_json::to_value(RegisterDeviceResponse { device_id }).unwrap()))
+            (StatusCode::OK, Json(json!({
+                "device_id": device_id,
+                "device_key": device_key
+            })))
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
-            // Create new device
+            // Generate secure random key
+            use uuid::Uuid;
+            let device_key = Uuid::new_v4().to_string();
+
             let metadata = json!({
                 "registered_via": "api",
             });
 
             match conn.execute(
-                "INSERT INTO devices (device_name, created, last_seen, metadata) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![req.device_name, now, now, metadata.to_string()],
+                "INSERT INTO devices (device_name, device_key, created, last_seen, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![req.device_name, device_key, now, now, metadata.to_string()],
             ) {
                 Ok(_) => {
                     let device_id = conn.last_insert_rowid();
-                    (StatusCode::OK, Json(serde_json::to_value(RegisterDeviceResponse { device_id }).unwrap()))
+                    (StatusCode::OK, Json(json!({
+                        "device_id": device_id,
+                        "device_key": device_key
+                    })))
                 }
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -138,7 +148,6 @@ pub async fn handle_register_device(
         ),
     }
 }
-
 pub async fn handle_list_conversations(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
