@@ -1,17 +1,14 @@
 pub mod specialist;
 pub mod worker;
-pub mod interactive;
 pub mod background;
 mod registry;
 pub mod conversation;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use serde_json::{json, Value};
 use crate::memory::Db;
 use crate::Message;
-use crate::state::AppState;
-use crate::tools::registry as tool_registry;
+use artificer_tools::registry as tool_registry;
 use specialist::{ExecutionContext, ResponseMessage, Specialist};
 
 #[derive(Debug, Clone)]
@@ -358,7 +355,6 @@ impl Task {
     }
 
     /// Agentic loop execution: keeps running until no more tool calls
-    /// FIXED: Proper tool result formatting
     async fn execute_agentic_loop(
         &self,
         mut messages: Vec<Message>,
@@ -393,7 +389,6 @@ impl Task {
 
                     println!("[Tool result: {}]", result);
 
-                    // FIXED: Format tool result properly as assistant message
                     // Ollama expects tool results as assistant messages, not "tool" role
                     messages.push(Message {
                         role: "assistant".to_string(),
@@ -407,9 +402,5 @@ impl Task {
                 return Ok(response);
             }
         }
-    }
-
-    pub async fn start_interactive_session(&self, state: AppState) -> Result<()> {
-        interactive::chat::execute(state).await
     }
 }

@@ -1,8 +1,9 @@
 use std::{sync::{Arc, Mutex, MutexGuard}, time::{SystemTime, UNIX_EPOCH}};
 use anyhow::Result;
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{json, Value};
 use crate::task::Task;
+use artificer_tools::db::DatabaseBackend;
 
 #[derive(Clone)]
 pub struct Db {
@@ -11,10 +12,7 @@ pub struct Db {
 
 impl Default for Db {
     fn default() -> Self {
-        let db_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("RustroverProjects")
-            .join("artificer")
+        let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("memory")
             .join("memory.db");
@@ -23,7 +21,7 @@ impl Default for Db {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let mut conn = Connection::open(&db_path).expect("Failed to open database");
+        let conn = Connection::open(&db_path).expect("Failed to open database");
 
         // Set busy timeout - wait up to 5 seconds if database is locked
         conn.busy_timeout(std::time::Duration::from_secs(5))
@@ -251,5 +249,37 @@ impl Db {
             )?;
         }
         Ok(())
+    }
+
+    fn json_to_rusqlite(val: &Value) -> rusqlite::types::Value {
+        match val {
+            Value::Null => rusqlite::types::Value::Null,
+            Value::Bool(b) => rusqlite::types::Value::Integer(*b as i64),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    rusqlite::types::Value::Integer(i)
+                } else {
+                    rusqlite::types::Value::Real(n.as_f64().unwrap_or(0.0))
+                }
+            }
+            Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+            other => rusqlite::types::Value::Text(other.to_string()),
+        }
+    }
+}
+
+impl DatabaseBackend for Db {
+    fn query(&self, sql: &str, params: Vec<Value>) -> Result<String> {
+        let rusqlite_params: Vec<rusqlite::types::Value> = params.iter()
+            .map(Db::json_to_rusqlite)
+            .collect();
+        self.query(sql, rusqlite::params_from_iter(rusqlite_params))
+    }
+
+    fn execute(&self, sql: &str, params: Vec<Value>) -> Result<usize> {
+        let rusqlite_params: Vec<rusqlite::types::Value> = params.iter()
+            .map(Db::json_to_rusqlite)
+            .collect();
+        self.execute(sql, rusqlite::params_from_iter(rusqlite_params))
     }
 }

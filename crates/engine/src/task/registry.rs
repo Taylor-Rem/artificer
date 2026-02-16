@@ -1,11 +1,12 @@
 use once_cell::sync::Lazy;
-use crate::tools::{Tool, ToolSchema, ParameterSchema};
+use artificer_tools::{Tool, ToolSchema, ParameterSchema, ToolLocation};
 use super::Task;
 
 static TASK_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| {
     ToolSchema {
         name: "switch_task",
         description: "Switch to a different task type based on user needs",
+        location: ToolLocation::Server,
         parameters: vec![
             ParameterSchema {
                 name: "task",
