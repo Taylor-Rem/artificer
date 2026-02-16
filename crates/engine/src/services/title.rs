@@ -1,4 +1,5 @@
-use crate::memory::Db;
+use artificer_tools::db::Db;
+use artificer_tools::rusqlite;
 
 pub struct Title {
     db: Db,

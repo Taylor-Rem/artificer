@@ -2,7 +2,8 @@ use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use axum::extract::State;
 use std::sync::Arc;
-use crate::memory::Db;
+use artificer_tools::db::Db;
+use artificer_tools::rusqlite;
 use crate::task::{conversation::Conversation, Task};
 use crate::Message;
 

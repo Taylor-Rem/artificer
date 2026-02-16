@@ -4,7 +4,7 @@ use axum::{
 };
 use std::sync::Arc;
 use super::handlers;
-use crate::memory::Db;
+use artificer_tools::db::Db;
 
 pub fn create_router() -> Router<Arc<Db>> {
     Router::new()

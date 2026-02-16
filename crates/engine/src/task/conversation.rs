@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crate::Message;
-use crate::memory::Db;
+use artificer_tools::db::Db;
+use artificer_tools::rusqlite;
 use crate::task::Task;
 
 pub struct Conversation {
@@ -135,7 +136,7 @@ impl Conversation {
     fn create_title_job(&self, conversation_id: u64, user_message: &Message) -> Result<u64> {
         self.db.create_job(
             self.device_id,
-            Task::TitleGeneration,
+            Task::TitleGeneration.title(),
             &serde_json::json!({
                 "conversation_id": conversation_id,
                 "user_message": {
@@ -151,7 +152,7 @@ impl Conversation {
     pub fn summarize(&self, conversation_id: u64) -> Result<u64> {
         self.db.create_job(
             self.device_id,
-            Task::Summarization,
+            Task::Summarization.title(),
             &serde_json::json!({ "conversation_id": conversation_id }),
             0
         )
@@ -161,7 +162,7 @@ impl Conversation {
     pub fn extract_memory(&self, conversation_id: u64) -> Result<u64> {
         self.db.create_job(
             self.device_id,
-            Task::MemoryExtraction,
+            Task::MemoryExtraction.title(),
             &serde_json::json!({ "conversation_id": conversation_id }),
             0
         )

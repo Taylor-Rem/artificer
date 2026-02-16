@@ -1,12 +1,11 @@
 use anyhow::Result;
 use tokio::sync::watch;
 use std::sync::Arc;
-use crate::memory::Db;
+use artificer_tools::db::Db;
 
 use super::routes::create_router;
 
 pub async fn start_server(shutdown_rx: watch::Receiver<bool>) -> Result<()> {
-    // Create shared DB instance
     let db = Arc::new(Db::default());
 
     let app = create_router()

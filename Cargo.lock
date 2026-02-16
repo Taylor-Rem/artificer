@@ -15,14 +15,10 @@ dependencies = [
  "anyhow",
  "artificer-tools",
  "axum",
- "dirs",
  "futures-util",
- "hostname",
  "http",
  "once_cell",
- "paste",
  "reqwest",
- "rusqlite",
  "serde",
  "serde_json",
  "tokio",
@@ -47,6 +43,7 @@ name = "artificer-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "once_cell",
  "paste",
  "rusqlite",

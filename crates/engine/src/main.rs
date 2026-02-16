@@ -3,21 +3,26 @@ use anyhow::Result;
 use tokio::sync::watch;
 
 use artificer_engine::api;
-use artificer_engine::memory::Db;
 use artificer_engine::task::worker::Worker;
+use artificer_tools::db;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Starting Artificer...\n");
 
-    // Initialize database and inject into tools crate
-    let db = Db::default();
-    artificer_tools::db::set_database(Arc::new(db));
+    // Initialize database
+    let db = db::init();
 
-    // Create shutdown channel (shared between API server and worker)
+    // Register tasks
+    use artificer_engine::task::Task;
+    for task in Task::all() {
+        db.register_task(task.task_id(), task.title(), task.description())?;
+    }
+
+    // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Start background worker
+    // Start worker
     let worker_shutdown_rx = shutdown_rx.clone();
     let worker = Worker::new(2, worker_shutdown_rx);
     let worker_handle = tokio::spawn(async move {
@@ -39,13 +44,8 @@ async fn main() -> Result<()> {
     tokio::signal::ctrl_c().await?;
     println!("\nReceived shutdown signal...");
 
-    // Signal shutdown to both server and worker
     let _ = shutdown_tx.send(true);
-
-    // Wait for API server to stop
     let _ = api_handle.await;
-
-    // Wait for worker to finish and drain queue
     let worker = worker_handle.await?;
     worker.drain_queue().await?;
 

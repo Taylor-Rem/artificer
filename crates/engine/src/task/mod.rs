@@ -6,7 +6,8 @@ pub mod conversation;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use crate::memory::Db;
+use artificer_tools::db::Db;
+use artificer_tools::rusqlite;
 use crate::Message;
 use artificer_tools::registry as tool_registry;
 use specialist::{ExecutionContext, ResponseMessage, Specialist};
