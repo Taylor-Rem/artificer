@@ -1,15 +1,17 @@
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;
-
+use axum::extract::State;
+use std::sync::Arc;
 use crate::memory::Db;
 use crate::task::{conversation::Conversation, Task};
 use crate::Message;
 
 use super::types::*;
 
-pub async fn handle_chat(Json(req): Json<ChatRequest>) -> impl IntoResponse {
-    // Use existing Artificer components!
-    let db = Db::default();
+pub async fn handle_chat(
+    State(db): State<Arc<Db>>,
+    Json(req): Json<ChatRequest>,
+) -> impl IntoResponse {
     let conversation = Conversation::new(req.device_id);
     let task = Task::Chat;
 
@@ -75,8 +77,10 @@ pub async fn handle_chat(Json(req): Json<ChatRequest>) -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::to_value(chat_response).unwrap()))
 }
 
-pub async fn handle_register_device(Json(req): Json<RegisterDeviceRequest>) -> impl IntoResponse {
-    let db = Db::default();
+pub async fn handle_register_device(
+    State(db): State<Arc<Db>>,
+    Json(req): Json<RegisterDeviceRequest>,
+) -> impl IntoResponse {
     let conn = match db.lock() {
         Ok(c) => c,
         Err(e) => {
@@ -187,7 +191,37 @@ pub async fn handle_list_conversations(
 
     (StatusCode::OK, Json(serde_json::to_value(ListConversationsResponse { conversations }).unwrap()))
 }
+// crates/engine/src/api/handlers.rs
 
+pub async fn handle_queue_summarization(Json(req): Json<QueueJobRequest>) -> impl IntoResponse {
+    let conversation = Conversation::new(req.device_id);
+
+    match conversation.summarize(req.conversation_id) {
+        Ok(job_id) => (
+            StatusCode::OK,
+            Json(json!({ "job_id": job_id, "status": "queued" }))
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to queue job: {}", e) }))
+        ),
+    }
+}
+
+pub async fn handle_queue_memory_extraction(Json(req): Json<QueueJobRequest>) -> impl IntoResponse {
+    let conversation = Conversation::new(req.device_id);
+
+    match conversation.extract_memory(req.conversation_id) {
+        Ok(job_id) => (
+            StatusCode::OK,
+            Json(json!({ "job_id": job_id, "status": "queued" }))
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to queue job: {}", e) }))
+        ),
+    }
+}
 pub async fn health_check() -> &'static str {
     "Artificer is running"
 }
