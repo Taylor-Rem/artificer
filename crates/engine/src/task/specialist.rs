@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use std::io::{self, Write};
 
 use crate::Message;
-use crate::tools::Tool;
+use artificer_tools::Tool;
 use crate::task::Task;
 
 #[derive(Serialize)]
@@ -91,7 +91,7 @@ impl Specialist {
     }
 
     pub fn tools(&self, current_task: &Task) -> Vec<Tool> {
-        use crate::tools::registry as tool_registry;
+        use artificer_tools::registry as tool_registry;
         use crate::task::registry as task_registry;
 
         let mut tools = match self {
@@ -111,11 +111,11 @@ impl Specialist {
     pub async fn execute(
         &self,
         url: &str,
-        current_task: &Task,  // Add current_task parameter
+        current_task: &Task,
         messages: Vec<Message>,
         streaming: bool,
     ) -> Result<ResponseMessage> {
-        let tools = self.tools(current_task);  // Pass it here
+        let tools = self.tools(current_task);
         let tools_option = if tools.is_empty() { None } else { Some(tools) };
 
         if streaming {

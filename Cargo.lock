@@ -9,10 +9,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
-name = "artificer"
+name = "artificer-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "artificer-tools",
  "axum",
  "dirs",
  "futures-util",
@@ -26,6 +27,31 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "artificer-envoy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "hostname",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "artificer-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "paste",
+ "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

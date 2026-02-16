@@ -1,8 +1,11 @@
-use crate::register_toolbelt;
 use anyhow::Result;
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
+
+use crate::ToolLocation;
+use crate::register_toolbelt;
+
 
 pub struct FileSmith {
     directory: PathBuf,
@@ -19,6 +22,7 @@ impl Default for FileSmith {
 register_toolbelt! {
     FileSmith {
         description: "Tool for interacting with files and directories and performing related task",
+        location: ToolLocation::Client,
         tools: {
             "read_file" => read_file {
                 description: "Reads the entire contents of a file and returns it as a string",

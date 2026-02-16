@@ -1,12 +1,18 @@
+use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 
-use artificer::api;
-use artificer::task::worker::Worker;
+use artificer_engine::api;
+use artificer_engine::memory::Db;
+use artificer_engine::task::worker::Worker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Starting Artificer...\n");
+
+    // Initialize database and inject into tools crate
+    let db = Db::default();
+    artificer_tools::db::set_database(Arc::new(db));
 
     // Create shutdown channel (shared between API server and worker)
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

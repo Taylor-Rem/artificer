@@ -3,7 +3,6 @@ pub mod memory;
 pub mod services;
 pub mod state;
 pub mod task;
-pub mod tools;
 
 use serde::{Deserialize, Serialize};
 use task::specialist::ToolCall;
