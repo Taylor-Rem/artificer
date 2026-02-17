@@ -46,3 +46,16 @@ pub struct QueueJobRequest {
     pub device_key: String,
     pub conversation_id: u64,
 }
+
+#[derive(Deserialize)]
+pub struct ToolExecutionRequest {
+    pub device_id: i64,
+    pub device_key: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Serialize)]
+pub struct ToolExecutionResponse {
+    pub result: String,
+}

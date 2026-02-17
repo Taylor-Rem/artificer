@@ -14,6 +14,7 @@ pub fn create_router(db: Arc<Db>) -> Router<Arc<Db>> {
         .route("/conversations", get(handlers::handle_list_conversations))
         .route("/jobs/summarize", post(handlers::handle_queue_summarization))
         .route("/jobs/extract_memory", post(handlers::handle_queue_memory_extraction))
+        .route("/tools/execute", post(handlers::handle_tool_execution))
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
             let db = db.clone();
             async move {

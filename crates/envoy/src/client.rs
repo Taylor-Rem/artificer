@@ -81,6 +81,7 @@ impl ApiClient {
     pub async fn queue_summarization(
         &self,
         device_id: i64,
+        device_key: String,
         conversation_id: u64,
     ) -> Result<u64> {
         let url = format!("{}/jobs/summarize", self.base_url);
@@ -89,6 +90,7 @@ impl ApiClient {
             .post(&url)
             .json(&serde_json::json!({
                 "device_id": device_id,
+                "device_key": device_key,
                 "conversation_id": conversation_id
             }))
             .send()
@@ -106,6 +108,7 @@ impl ApiClient {
     pub async fn queue_memory_extraction(
         &self,
         device_id: i64,
+        device_key: String,
         conversation_id: u64,
     ) -> Result<u64> {
         let url = format!("{}/jobs/extract_memory", self.base_url);
@@ -114,6 +117,7 @@ impl ApiClient {
             .post(&url)
             .json(&serde_json::json!({
                 "device_id": device_id,
+                "device_key": device_key,
                 "conversation_id": conversation_id
             }))
             .send()

@@ -8,7 +8,9 @@ name = "envoy"
 path = "src/main.rs"
 
 [dependencies]
+artificer-tools = { path = "../tools" }
 anyhow.workspace = true
+axum = "0.8.8"
 dirs = "6.0"
 hostname = "0.4.2"
 reqwest = { version = "0.13.1", features = ["json"] }
