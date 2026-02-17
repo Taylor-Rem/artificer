@@ -60,3 +60,10 @@ pub fn get_client_tools() -> Vec<Tool> {
         .map(|s| s.to_tool())
         .collect()
 }
+
+pub fn get_tool_schema(name: &str) -> anyhow::Result<&'static ToolSchema> {
+    TOOL_SCHEMAS
+        .iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| anyhow::anyhow!("Tool schema '{}' not found", name))
+}

@@ -321,6 +321,8 @@ impl Task {
     pub async fn execute(
         &self,
         messages: Vec<Message>,
+        device_id: i64,
+        device_key: String,
         streaming: bool,
     ) -> Result<ResponseMessage> {
         match self.task_type() {
@@ -330,7 +332,7 @@ impl Task {
                 specialist.execute(url, self, messages, streaming).await
             }
             TaskType::AgenticLoop => {
-                self.execute_agentic_loop(messages, streaming).await
+                self.execute_agentic_loop(messages, device_id, device_key, streaming).await
             }
         }
     }
@@ -341,6 +343,7 @@ impl Task {
         user_messages: Vec<Message>,
         db: &Db,
         device_id: i64,
+        device_key: String,
         streaming: bool,
     ) -> Result<ResponseMessage> {
         let system_prompt = self.build_system_prompt(db, device_id)?;
@@ -352,13 +355,15 @@ impl Task {
         }];
         messages.extend(user_messages);
 
-        self.execute(messages, streaming).await
+        self.execute(messages, device_id, device_key, streaming).await
     }
 
     /// Agentic loop execution: keeps running until no more tool calls
     async fn execute_agentic_loop(
         &self,
         mut messages: Vec<Message>,
+        device_id: i64,
+        device_key: String,
         streaming: bool,
     ) -> Result<ResponseMessage> {
         let specialist = self.specialist();
@@ -380,17 +385,39 @@ impl Task {
 
                     // Check if this is a task switch
                     if tool_name == "switch_task" {
-                        // Handle task switching - for now just log it
                         println!("[Task switch requested - not yet implemented]");
                         continue;
                     }
 
-                    let result = tool_registry::use_tool(tool_name, args)
-                        .unwrap_or_else(|e| format!("Error: {}", e));
+                    // Determine execution strategy based on tool location
+                    use artificer_tools::executor::ToolExecutor;
+                    use artificer_tools::ToolLocation;
+
+                    let result = match artificer_tools::registry::get_tool_schema(tool_name) {
+                        Ok(schema) => {
+                            let executor = match schema.location {
+                                ToolLocation::Server => ToolExecutor::local(),
+                                ToolLocation::Client => {
+                                    ToolExecutor::remote(
+                                        "http://localhost:8081".to_string(),
+                                        device_id,
+                                        device_key.clone(),
+                                    )
+                                }
+                            };
+
+                            executor.execute(tool_name, args).await
+                                .unwrap_or_else(|e| format!("Error: {}", e))
+                        }
+                        Err(_) => {
+                            // Fallback to local execution if schema not found
+                            tool_registry::use_tool(tool_name, args)
+                                .unwrap_or_else(|e| format!("Error: {}", e))
+                        }
+                    };
 
                     println!("[Tool result: {}]", result);
 
-                    // Ollama expects tool results as assistant messages, not "tool" role
                     messages.push(Message {
                         role: "assistant".to_string(),
                         content: Some(result),

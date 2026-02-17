@@ -20,8 +20,8 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: Str
         if input.eq_ignore_ascii_case("quit") {
             if let Some(conv_id) = conversation_id {
                 println!("Queueing background processing...");
-                let _ = client.queue_summarization(device_id, conv_id).await;
-                let _ = client.queue_memory_extraction(device_id, conv_id).await;
+                let _ = client.queue_summarization(device_id, device_key.clone(), conv_id).await;
+                let _ = client.queue_memory_extraction(device_id, device_key.clone(), conv_id).await;
             }
             println!("Goodbye!");
             break;

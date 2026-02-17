@@ -3,7 +3,7 @@ use serde_json::json;
 use axum::extract::State;
 use std::sync::Arc;
 use artificer_tools::db::Db;
-use artificer_tools::rusqlite;
+use artificer_tools::{rusqlite, registry};
 use crate::task::{conversation::Conversation, Task};
 use crate::Message;
 
@@ -53,8 +53,7 @@ pub async fn handle_chat(
 
     // Execute task
     let messages = vec![user_message];
-    let response = match task.execute_with_prompt(messages, &db, req.device_id, false).await {
-        Ok(resp) => resp,
+    let response = match task.execute_with_prompt(messages, &db, req.device_id, req.device_key.clone(), false).await {        Ok(resp) => resp,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -229,6 +228,19 @@ pub async fn handle_queue_memory_extraction(Json(req): Json<QueueJobRequest>) ->
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Failed to queue job: {}", e) }))
+        ),
+    }
+}
+
+pub async fn handle_tool_execution(Json(req): Json<ToolExecutionRequest>) -> impl IntoResponse {
+    match registry::use_tool(&req.tool_name, &req.arguments) {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({ "result": result }))
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Tool execution failed: {}", e) }))
         ),
     }
 }

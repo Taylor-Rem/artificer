@@ -1,6 +1,7 @@
 mod client;
 mod config;
 mod ui;
+mod tools;
 
 use anyhow::Result;
 use client::ApiClient;
@@ -42,6 +43,14 @@ async fn main() -> Result<()> {
             }
         }
     };
+
+    // Start tool server in background
+    let tool_device_key = device_key.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tools::start_tool_server(device_id, tool_device_key).await {
+            eprintln!("Tool server error: {}", e);
+        }
+    });
 
     // Handle commands — default to chat if no args
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("chat");

@@ -48,11 +48,6 @@ impl Config {
         Ok(())
     }
 
-    pub fn set_device_id(&mut self, device_id: i64) -> Result<()> {
-        self.device_id = Some(device_id);
-        self.save()
-    }
-
     pub fn set_device_credentials(&mut self, device_id: i64, device_key: String) -> Result<()> {
         self.device_id = Some(device_id);
         self.device_key = Some(device_key);
