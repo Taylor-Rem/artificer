@@ -7,7 +7,8 @@ use futures_util::StreamExt;
 use std::io::{self, Write};
 
 use crate::Message;
-use artificer_tools::Tool;
+use artificer_shared::Tool;
+use crate::events::EventSender;
 use crate::task::Task;
 
 #[derive(Serialize)]
@@ -57,7 +58,6 @@ impl ResponseMessage {
 #[derive(Deserialize, Debug)]
 struct StreamChunk {
     message: ResponseMessage,
-    done: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +91,7 @@ impl Specialist {
     }
 
     pub fn tools(&self, current_task: &Task) -> Vec<Tool> {
-        use artificer_tools::registry as tool_registry;
+        use artificer_shared::registry as tool_registry;
         use crate::task::registry as task_registry;
 
         let mut tools = match self {
@@ -114,14 +114,15 @@ impl Specialist {
         current_task: &Task,
         messages: Vec<Message>,
         streaming: bool,
+        events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         let tools = self.tools(current_task);
         let tools_option = if tools.is_empty() { None } else { Some(tools) };
 
         if streaming {
-            self.execute_streaming(url, messages, tools_option).await
+            self.execute_streaming(url, messages, tools_option, events).await
         } else {
-            self.execute_standard(url, messages, tools_option).await
+            self.execute_standard(url, messages, tools_option, events).await
         }
     }
 
@@ -130,6 +131,7 @@ impl Specialist {
         url: &str,
         messages: Vec<Message>,
         tools: Option<Vec<Tool>>,
+        _events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         let client = Client::new();
         let request = ChatRequest {
@@ -155,6 +157,7 @@ impl Specialist {
         url: &str,
         messages: Vec<Message>,
         tools: Option<Vec<Tool>>,
+        events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         let client = Client::new();
         let request = ChatRequest {
@@ -188,19 +191,25 @@ impl Specialist {
                     continue;
                 }
 
-                let chunk: StreamChunk = serde_json::from_str(line)?;
-                role = chunk.message.role.clone();
+                let stream_chunk: StreamChunk = serde_json::from_str(line)?;
+                role = stream_chunk.message.role.clone();
 
-                if let Some(content) = &chunk.message.content {
+                if let Some(content) = &stream_chunk.message.content {
                     if !content.is_empty() {
-                        print!("{}", content);
-                        io::stdout().flush()?;
+                        // Send chunk event
+                        if let Some(ref ev) = events {
+                            ev.stream_chunk(content.clone());
+                        } else {
+                            // Fallback to printing
+                            print!("{}", content);
+                            io::stdout().flush()?;
+                        }
                         full_content.push_str(content);
                     }
                 }
 
-                if chunk.message.tool_calls.is_some() {
-                    tool_calls = chunk.message.tool_calls.clone();
+                if stream_chunk.message.tool_calls.is_some() {
+                    tool_calls = stream_chunk.message.tool_calls.clone();
                 }
             }
         }
@@ -209,17 +218,21 @@ impl Specialist {
             let line = String::from_utf8_lossy(&buffer);
             let line = line.trim();
             if !line.is_empty() {
-                let chunk: StreamChunk = serde_json::from_str(line)?;
-                role = chunk.message.role.clone();
-                if let Some(content) = &chunk.message.content {
+                let stream_chunk: StreamChunk = serde_json::from_str(line)?;
+                role = stream_chunk.message.role.clone();
+                if let Some(content) = &stream_chunk.message.content {
                     if !content.is_empty() {
-                        print!("{}", content);
-                        io::stdout().flush()?;
+                        if let Some(ref ev) = events {
+                            ev.stream_chunk(content.clone());
+                        } else {
+                            print!("{}", content);
+                            io::stdout().flush()?;
+                        }
                         full_content.push_str(content);
                     }
                 }
-                if chunk.message.tool_calls.is_some() {
-                    tool_calls = chunk.message.tool_calls.clone();
+                if stream_chunk.message.tool_calls.is_some() {
+                    tool_calls = stream_chunk.message.tool_calls.clone();
                 }
             }
         }

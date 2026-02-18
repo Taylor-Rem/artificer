@@ -7,6 +7,7 @@ pub struct ChatRequest {
     pub device_key: String,
     pub conversation_id: Option<u64>,
     pub message: String,
+    pub stream: Option<bool>
 }
 
 #[derive(Serialize)]

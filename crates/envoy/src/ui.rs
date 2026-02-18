@@ -1,6 +1,39 @@
+// crates/envoy/src/ui.rs
+
+use artificer_shared::events::ChatEvent;
+use crate::client::ApiClient;
 use anyhow::Result;
 use std::io::{self, Write};
-use crate::client::ApiClient;
+
+pub async fn single_message(
+    client: ApiClient,
+    device_id: i64,
+    device_key: String,
+    message: String,
+) -> Result<()> {
+    match client
+        .chat_stream(device_id, device_key.clone(), None, message, |event| {
+            handle_event(&event)
+        })
+        .await
+    {
+        Ok(conv_id) => {
+            println!();
+            if conv_id > 0 {
+                let _ = client
+                    .queue_summarization(device_id, device_key.clone(), conv_id)
+                    .await;
+                let _ = client
+                    .queue_memory_extraction(device_id, device_key.clone(), conv_id)
+                    .await;
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+        }
+    }
+    Ok(())
+}
 
 pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: String) -> Result<()> {
     println!("Envoy chat started. Type 'quit' to exit.\n");
@@ -8,7 +41,6 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: Str
     let mut conversation_id: Option<u64> = None;
 
     loop {
-        // Get user input
         print!("You: ");
         io::stdout().flush()?;
 
@@ -16,10 +48,9 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: Str
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
-        // Handle quit
         if input.eq_ignore_ascii_case("quit") {
             if let Some(conv_id) = conversation_id {
-                println!("Queueing background processing...");
+                println!("\nQueueing background processing...");
                 let _ = client.queue_summarization(device_id, device_key.clone(), conv_id).await;
                 let _ = client.queue_memory_extraction(device_id, device_key.clone(), conv_id).await;
             }
@@ -31,29 +62,53 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: Str
             continue;
         }
 
-        // Send to artificer
-        match client.chat(device_id, device_key.clone(), conversation_id, input.to_string()).await {
-            Ok(response) => {
-                conversation_id = Some(response.conversation_id);
-                println!("\nAssistant: {}\n", response.content);
+        println!(); // Blank line before response
+
+        match client.chat_stream(
+            device_id,
+            device_key.clone(),
+            conversation_id,
+            input.to_string(),
+            |event| handle_event(&event),
+        ).await {
+            Ok(conv_id) => {
+                conversation_id = Some(conv_id);
+                println!("\n"); // Blank line after response
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {}\n", e);
             }
         }
     }
+
     Ok(())
 }
 
-pub async fn single_message(client: ApiClient, device_id: i64, device_key: String, message: String) -> Result<()> {
-    match client.chat(device_id, device_key, None, message).await {
-        Ok(response) => {
-            println!("{}", response.content);
+fn handle_event(event: &ChatEvent) {
+    match event {
+        ChatEvent::TaskSwitch { from, to } => {
+            println!("\n⚡ Switching: {} → {}", from, to);
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
+        ChatEvent::ToolCall { task, tool, .. } => {
+            println!("🔧 [{}] Calling: {}", task, tool);
         }
+        ChatEvent::ToolResult { tool: _, result, truncated, .. } => {
+            if *truncated {
+                println!("   ✓ {} [truncated]", result.lines().next().unwrap_or(""));
+            } else {
+                println!("   ✓ {}", result);
+            }
+        }
+        ChatEvent::StreamChunk { content } => {
+            print!("{}", content);
+            io::stdout().flush().ok();
+        }
+        ChatEvent::Done { .. } => {
+            // Response complete, nothing to print
+        }
+        ChatEvent::Error { message } => {
+            eprintln!("\n❌ Error: {}", message);
+        }
+        _ => {}
     }
-
-    Ok(())
 }

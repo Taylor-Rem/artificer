@@ -3,7 +3,7 @@ use tokio::sync::watch;
 
 use artificer_engine::api;
 use artificer_engine::task::worker::Worker;
-use artificer_tools::db;
+use artificer_shared::db;
 
 #[tokio::main]
 async fn main() -> Result<()> {

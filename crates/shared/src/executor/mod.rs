@@ -47,7 +47,7 @@ impl ToolExecutor {
         args: &Value,
     ) -> Result<String> {
         let client = reqwest::Client::new();
-        let url = format!("{}/tools/execute", base_url);
+        let url = format!("{}/shared/execute", base_url);
 
         let request_body = serde_json::json!({
             "device_id": device_id,

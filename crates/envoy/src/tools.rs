@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{extract::Json, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use artificer_tools::registry;
+use artificer_shared::registry;
 use std::sync::Arc;
 
 struct ToolServerState {
@@ -46,7 +46,7 @@ pub async fn start_tool_server(device_id: i64, device_key: String) -> Result<()>
     });
 
     let app = Router::new()
-        .route("/tools/execute", post(handle_tool_execution))
+        .route("/shared/execute", post(handle_tool_execution))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;

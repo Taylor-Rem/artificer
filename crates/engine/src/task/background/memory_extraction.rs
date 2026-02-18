@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use artificer_tools::rusqlite;
+use artificer_shared::rusqlite;
 use crate::task::worker::JobContext;
 use crate::task::specialist::ExecutionContext;
 use crate::Message;
@@ -73,7 +73,7 @@ pub fn execute<'a>(
             "Tasks used: {}\n\nConversation:\n{}\n\n\
             Extract two types of information from this conversation:\n\n\
             1. MEMORIES - Key information classified as:\n\
-            - FACT: Objective, verifiable information (OS, paths, tools, project details)\n\
+            - FACT: Objective, verifiable information (OS, paths, shared, project details)\n\
             - PREFERENCE: User's subjective choices (style, tone, workflow preferences)\n\
             - CONTEXT: Current/temporary situation (what they're working on now)\n\n\
             2. KEYWORDS - Important terms, topics, and concepts that characterize this conversation.\n\
@@ -117,7 +117,8 @@ pub fn execute<'a>(
             ExecutionContext::Background.url(),
             &Task::MemoryExtraction,
             llm_messages,
-            false
+            false,
+            None,
         ).await?;
 
         let extraction_json = response.content.unwrap_or_default();

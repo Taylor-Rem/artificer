@@ -1,7 +1,6 @@
 use anyhow::Result;
 use crate::Message;
-use artificer_tools::db::Db;
-use artificer_tools::rusqlite;
+use artificer_shared::{db::Db, rusqlite};
 use crate::task::Task;
 
 pub struct Conversation {

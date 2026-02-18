@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use artificer_tools::rusqlite;
+use artificer_shared::rusqlite;
 use crate::task::worker::JobContext;
 use crate::task::specialist::ExecutionContext;
 use crate::Message;
@@ -39,7 +39,8 @@ pub fn execute<'a>(
             ExecutionContext::Background.url(),
             &Task::TitleGeneration,
             messages,
-            false
+            false,
+            None,
         ).await?;
 
         let raw_title = response.content.unwrap_or_default();

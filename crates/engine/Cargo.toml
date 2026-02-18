@@ -8,15 +8,16 @@ name = "artificer"
 path = "src/main.rs"
 
 [dependencies]
-artificer-tools = { path = "../tools" }
+artificer-shared.workspace = true
 anyhow.workspace = true
-axum = "0.8.8"
-http = "1.4.0"
-once_cell = "1.19"
-futures-util = "0.3"
-reqwest = { version = "0.13.1", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+once_cell.workspace = true
+rusqlite.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+axum.workspace = true
+futures-util.workspace = true
+http = "1.4.0"
 uuid = { version = "1.20.0", features = ["v4"] }
-rusqlite = "0.34.0"
+tokio-stream = { version = "0.1.18", features = ["sync"] }

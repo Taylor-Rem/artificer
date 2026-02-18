@@ -4,6 +4,7 @@ pub mod registry;
 pub mod schemas;
 pub mod toolbelts;
 pub mod executor;
+pub mod events;
 
 pub use rusqlite;
 pub use schemas::{Tool, ToolSchema, ToolLocation, ParameterSchema};
