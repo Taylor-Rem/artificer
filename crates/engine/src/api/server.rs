@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tokio::sync::watch;
 use std::sync::Arc;
-use artificer_tools::db::Db;
+use artificer_shared::db::Db;
 
 use super::routes::create_router;
 

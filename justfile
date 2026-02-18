@@ -7,7 +7,7 @@ dev-engine:
       --ignore '*.db' \
       --ignore 'target/*' \
       -w crates/engine \
-      -w crates/tools \
+      -w crates/shared \
       -x 'run --bin artificer'
 
 # Run engine in debug mode
@@ -18,7 +18,7 @@ dev-engine-debug:
       --ignore '*.db' \
       --ignore 'target/*' \
       -w crates/engine \
-      -w crates/tools \
+      -w crates/shared \
       -x 'run --bin artificer'
 
 # Run envoy with hot reload
@@ -29,7 +29,7 @@ dev-envoy:
       --ignore '*.db' \
       --ignore 'target/*' \
       -w crates/envoy \
-      -w crates/tools \
+      -w crates/shared \
       -x 'run --bin envoy'
 
 # Run envoy in debug mode
@@ -40,7 +40,7 @@ dev-envoy-debug:
       --ignore '*.db' \
       --ignore 'target/*' \
       -w crates/envoy \
-      -w crates/tools \
+      -w crates/shared \
       -x 'run --bin envoy'
 
 # Build everything

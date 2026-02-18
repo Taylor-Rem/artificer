@@ -1,4 +1,4 @@
-// crates/tools/src/schemas.rs
+// crates/shared/src/mod
 use serde::Serialize;
 use serde_json::{json, Value};
 

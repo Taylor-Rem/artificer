@@ -1,4 +1,4 @@
-// crates/tools/src/toolbelts/archivist.rs
+// crates/shared/src/toolbelts/archivist.rs
 use anyhow::Result;
 use crate::{register_toolbelt, ToolLocation, db};
 

@@ -162,7 +162,7 @@ pub fn get_device_context() -> Option<i64> {
     CURRENT_DEVICE_ID.with(|id| *id.borrow())
 }
 
-// Helper for tools that need to convert JSON to rusqlite params
+// Helper for shared that need to convert JSON to rusqlite params
 pub fn json_to_rusqlite(val: &Value) -> rusqlite::types::Value {
     match val {
         Value::Null => rusqlite::types::Value::Null,

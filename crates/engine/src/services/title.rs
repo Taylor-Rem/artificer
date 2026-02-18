@@ -1,5 +1,4 @@
-use artificer_tools::db::Db;
-use artificer_tools::rusqlite;
+use artificer_shared::{db::Db, rusqlite};
 
 pub struct Title {
     db: Db,

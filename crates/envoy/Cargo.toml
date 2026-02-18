@@ -8,12 +8,13 @@ name = "envoy"
 path = "src/main.rs"
 
 [dependencies]
-artificer-tools = { path = "../tools" }
+artificer-shared.workspace = true
 anyhow.workspace = true
-axum = "0.8.8"
-dirs = "6.0"
-hostname = "0.4.2"
-reqwest = { version = "0.13.1", features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+dirs = "6.0"
+hostname = "0.4.2"

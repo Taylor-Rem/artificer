@@ -1,6 +1,7 @@
 pub mod api;
 pub mod services;
 pub mod task;
+pub mod events;
 
 use serde::{Deserialize, Serialize};
 use task::specialist::ToolCall;

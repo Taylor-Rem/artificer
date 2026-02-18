@@ -1,22 +1,42 @@
-use axum::{extract::Json, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::Json,
+    http::StatusCode,
+    response::{IntoResponse, sse::{Event, Sse}},
+};
+use futures_util::stream::Stream;
 use serde_json::json;
 use axum::extract::State;
 use std::sync::Arc;
-use artificer_tools::db::Db;
-use artificer_tools::{rusqlite, registry};
+use std::convert::Infallible;
+use artificer_shared::{db::Db, rusqlite, registry};
+use crate::events;
 use crate::task::{conversation::Conversation, Task};
 use crate::Message;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 
 use super::types::*;
 
 pub async fn handle_chat(
     State(db): State<Arc<Db>>,
     Json(req): Json<ChatRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let stream = req.stream.unwrap_or(false);
+
+    if stream {
+        handle_chat_stream(db, req).await.into_response()
+    } else {
+        handle_chat_standard(db, req).await.into_response()
+    }
+}
+
+async fn handle_chat_standard(
+    db: Arc<Db>,
+    req: ChatRequest,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let conversation = Conversation::new(req.device_id);
     let task = Task::Chat;
 
-    // Initialize conversation if needed
     let conversation_id = match req.conversation_id {
         Some(id) => id,
         None => {
@@ -29,40 +49,37 @@ pub async fn handle_chat(
             match conversation.init(&user_message, &task).await {
                 Ok((conv_id, _th_id)) => conv_id,
                 Err(e) => {
-                    return (
+                    return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": format!("Failed to initialize conversation: {}", e) })),
-                    );
+                    ));
                 }
             }
         }
     };
 
-    // Build message for execution
     let user_message = Message {
         role: "user".to_string(),
         content: Some(req.message.clone()),
         tool_calls: None,
     };
 
-    // Save user message
     let mut message_count = 0;
     if let Err(e) = conversation.add_message(Some(conversation_id), "user", &req.message, &mut message_count) {
         eprintln!("Warning: Failed to save user message: {}", e);
     }
 
-    // Execute task
     let messages = vec![user_message];
-    let response = match task.execute_with_prompt(messages, &db, req.device_id, req.device_key.clone(), false).await {        Ok(resp) => resp,
+    let response = match task.execute_with_prompt(messages, &db, req.device_id, req.device_key.clone(), false, None).await {
+        Ok(resp) => resp,
         Err(e) => {
-            return (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("Task execution failed: {}", e) })),
-            );
+            ));
         }
     };
 
-    // Save assistant response
     if let Some(content) = &response.content {
         if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", content, &mut message_count) {
             eprintln!("Warning: Failed to save assistant message: {}", e);
@@ -74,7 +91,93 @@ pub async fn handle_chat(
         content: response.content.unwrap_or_default(),
     };
 
-    (StatusCode::OK, Json(serde_json::to_value(chat_response).unwrap()))
+    Ok(Json(serde_json::to_value(chat_response).unwrap()))
+}
+
+async fn handle_chat_stream(
+    db: Arc<Db>,
+    req: ChatRequest,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // Generate unique request ID
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    // Create event receiver
+    let rx = events::create_channel(request_id.clone());
+
+    // Spawn task execution in background
+    tokio::spawn(async move {
+        let conversation = Conversation::new(req.device_id);
+        let task = Task::Chat;
+        let events = events::EventSender::new(request_id.clone());
+
+        let conversation_id = match req.conversation_id {
+            Some(id) => id,
+            None => {
+                let user_message = Message {
+                    role: "user".to_string(),
+                    content: Some(req.message.clone()),
+                    tool_calls: None,
+                };
+
+                match conversation.init(&user_message, &task).await {
+                    Ok((conv_id, _th_id)) => conv_id,
+                    Err(e) => {
+                        events.error(format!("Failed to initialize conversation: {}", e));
+                        return;
+                    }
+                }
+            }
+        };
+
+        let user_message = Message {
+            role: "user".to_string(),
+            content: Some(req.message.clone()),
+            tool_calls: None,
+        };
+
+        let mut message_count = 0;
+        if let Err(e) = conversation.add_message(Some(conversation_id), "user", &req.message, &mut message_count) {
+            eprintln!("Warning: Failed to save user message: {}", e);
+        }
+
+        let messages = vec![user_message];
+
+        // Execute with event sender
+        match task.execute_with_prompt(
+            messages,
+            &db,
+            req.device_id,
+            req.device_key.clone(),
+            true,  // streaming = true
+            Some(events.clone())  // Pass event sender
+        ).await {
+            Ok(response) => {
+                if let Some(content) = &response.content {
+                    if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", content, &mut message_count) {
+                        eprintln!("Warning: Failed to save assistant message: {}", e);
+                    }
+                }
+                events.complete(conversation_id);
+            }
+            Err(e) => {
+                events.error(format!("Task execution failed: {}", e));
+            }
+        }
+    });
+
+    // Convert broadcast receiver to SSE stream
+    let stream = BroadcastStream::new(rx)
+        .filter_map(|result| {
+            match result {
+                Ok(event) => {
+                    let json = serde_json::to_string(&event).unwrap();
+                    Some(Ok(Event::default().data(json)))
+                }
+                Err(_) => None,
+            }
+        });
+
+    Sse::new(stream)
 }
 
 pub async fn handle_register_device(

@@ -6,11 +6,10 @@ pub mod conversation;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use artificer_tools::db::Db;
-use artificer_tools::rusqlite;
+use artificer_shared::{db::Db, rusqlite, registry as tool_registry};
 use crate::Message;
-use artificer_tools::registry as tool_registry;
 use specialist::{ExecutionContext, ResponseMessage, Specialist};
+use crate::events::EventSender;
 
 #[derive(Debug, Clone)]
 pub enum TaskType {
@@ -175,7 +174,7 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::AgenticLoop,
         instructions: "You are Artificer, a helpful AI assistant. Engage naturally with the user, \
-                       provide thoughtful responses, and use available tools when appropriate. \
+                       provide thoughtful responses, and use available shared when appropriate. \
                        Maintain context from the conversation history.",
         switches_to: [Research, CodeReview],
     },
@@ -324,15 +323,16 @@ impl Task {
         device_id: i64,
         device_key: String,
         streaming: bool,
+        events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         match self.task_type() {
             TaskType::Singular => {
                 let specialist = self.specialist();
                 let url = self.execution_context().url();
-                specialist.execute(url, self, messages, streaming).await
+                specialist.execute(url, self, messages, streaming, events).await
             }
             TaskType::AgenticLoop => {
-                self.execute_agentic_loop(messages, device_id, device_key, streaming).await
+                self.execute_agentic_loop(messages, device_id, device_key, streaming, events).await
             }
         }
     }
@@ -345,6 +345,7 @@ impl Task {
         device_id: i64,
         device_key: String,
         streaming: bool,
+        events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         let system_prompt = self.build_system_prompt(db, device_id)?;
 
@@ -355,7 +356,7 @@ impl Task {
         }];
         messages.extend(user_messages);
 
-        self.execute(messages, device_id, device_key, streaming).await
+        self.execute(messages, device_id, device_key, streaming, events).await
     }
 
     /// Agentic loop execution: keeps running until no more tool calls
@@ -365,12 +366,13 @@ impl Task {
         device_id: i64,
         device_key: String,
         streaming: bool,
+        events: Option<EventSender>,
     ) -> Result<ResponseMessage> {
         let specialist = self.specialist();
         let url = self.execution_context().url();
 
         loop {
-            let response = specialist.execute(url, self, messages.clone(), streaming).await?;
+            let response = specialist.execute(url, self, messages.clone(), streaming, events.clone()).await?;
 
             // Add assistant response to history
             messages.push(response.to_message());
@@ -383,17 +385,33 @@ impl Task {
 
                     println!("[Calling tool: {} with args: {}]", tool_name, args);
 
-                    // Check if this is a task switch
                     if tool_name == "switch_task" {
-                        println!("[Task switch requested - not yet implemented]");
-                        continue;
+                        let target_task_name = args["task"].as_str()
+                            .ok_or_else(|| anyhow::anyhow!("Missing task name"))?;
+
+                        let target_task = Task::from_str(target_task_name)
+                            .ok_or_else(|| anyhow::anyhow!("Unknown task: {}", target_task_name))?;
+
+                        println!("\n[Switching from {} to {}]\n", self.title(), target_task.title());
+
+                        messages.push(Message {
+                            role: "system".to_string(),
+                            content: Some(format!(
+                                "Task switch: {} → {}. Continue with the current objective.",
+                                self.title(),
+                                target_task.title()
+                            )),
+                            tool_calls: None,
+                        });
+
+                        return Box::pin(target_task.execute(messages, device_id, device_key, streaming, events)).await;
                     }
 
                     // Determine execution strategy based on tool location
-                    use artificer_tools::executor::ToolExecutor;
-                    use artificer_tools::ToolLocation;
+                    use artificer_shared::executor::ToolExecutor;
+                    use artificer_shared::ToolLocation;
 
-                    let result = match artificer_tools::registry::get_tool_schema(tool_name) {
+                    let result = match artificer_shared::registry::get_tool_schema(tool_name) {
                         Ok(schema) => {
                             let executor = match schema.location {
                                 ToolLocation::Server => ToolExecutor::local(),

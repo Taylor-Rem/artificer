@@ -6,7 +6,7 @@ use axum::{
     body::Body,
 };
 use std::sync::Arc;
-use artificer_tools::db::Db;
+use artificer_shared::db::Db;
 use serde_json::json;
 
 pub async fn authenticate_device(

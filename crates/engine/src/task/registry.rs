@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use artificer_tools::{Tool, ToolSchema, ParameterSchema, ToolLocation};
+use artificer_shared::{Tool, ToolSchema, ParameterSchema, ToolLocation};
 use super::Task;
 
 static TASK_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| {
@@ -36,10 +36,4 @@ pub fn get_available_tasks(current_task: &Task) -> Vec<Tool> {
     schema.parameters[0].description = Box::leak(format!("Task to switch to. Available: {}", task_list).into_boxed_str());
 
     vec![schema.to_tool()]
-}
-
-/// Handle task switching tool call
-pub fn switch_task(task_name: &str) -> anyhow::Result<Task> {
-    Task::from_str(task_name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown task: {}", task_name))
 }

@@ -1,4 +1,4 @@
-// crates/tools/src/macros.rs
+// crates/shared/src/mod
 
 #[macro_export]
 macro_rules! register_toolbelt {
