@@ -1,5 +1,3 @@
-// crates/shared/src/toolbelts/web_search.rs
-
 use anyhow::Result;
 use scraper::{Html, Selector};
 use crate::{register_toolbelt, ToolLocation};
@@ -44,10 +42,10 @@ impl WebSearch {
             .unwrap_or(5)
             .min(10) as usize;
 
-        // Use tokio::task::block_in_place to safely run async code
-        let runtime = tokio::runtime::Handle::current();
-        let result = runtime.block_on(async {
-            self.search_async(query, max_results).await
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.search_async(query, max_results).await
+            })
         })?;
 
         Ok(result)
@@ -64,9 +62,10 @@ impl WebSearch {
             return Ok("Error: URL must start with http:// or https://".to_string());
         }
 
-        let runtime = tokio::runtime::Handle::current();
-        let result = runtime.block_on(async {
-            self.fetch_page_async(url).await
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.fetch_page_async(url).await
+            })
         })?;
 
         Ok(result)
