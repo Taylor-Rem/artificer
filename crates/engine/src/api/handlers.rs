@@ -8,9 +8,9 @@ use serde_json::json;
 use axum::extract::State;
 use std::sync::Arc;
 use std::convert::Infallible;
-use artificer_shared::{db::Db, rusqlite, registry};
+use artificer_shared::{db::Db, rusqlite};
 use crate::events;
-use crate::task::{conversation::Conversation, Task};
+use crate::task::{conversation::Conversation, PipelineStep, Task};
 use crate::Message;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -20,83 +20,6 @@ use super::types::*;
 pub async fn handle_chat(
     State(db): State<Arc<Db>>,
     Json(req): Json<ChatRequest>,
-) -> axum::response::Response {
-    let stream = req.stream.unwrap_or(false);
-
-    if stream {
-        handle_chat_stream(db, req).await.into_response()
-    } else {
-        handle_chat_standard(db, req).await.into_response()
-    }
-}
-
-async fn handle_chat_standard(
-    db: Arc<Db>,
-    req: ChatRequest,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let conversation = Conversation::new(req.device_id);
-    let task = Task::Chat;
-
-    let conversation_id = match req.conversation_id {
-        Some(id) => id,
-        None => {
-            let user_message = Message {
-                role: "user".to_string(),
-                content: Some(req.message.clone()),
-                tool_calls: None,
-            };
-
-            match conversation.init(&user_message, &task).await {
-                Ok((conv_id, _th_id)) => conv_id,
-                Err(e) => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("Failed to initialize conversation: {}", e) })),
-                    ));
-                }
-            }
-        }
-    };
-
-    let user_message = Message {
-        role: "user".to_string(),
-        content: Some(req.message.clone()),
-        tool_calls: None,
-    };
-
-    let mut message_count = 0;
-    if let Err(e) = conversation.add_message(Some(conversation_id), "user", &req.message, &mut message_count) {
-        eprintln!("Warning: Failed to save user message: {}", e);
-    }
-
-    let messages = vec![user_message];
-    let response = match task.execute_with_prompt(messages, &db, req.device_id, req.device_key.clone(), false, None).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Task execution failed: {}", e) })),
-            ));
-        }
-    };
-
-    if let Some(content) = &response.content {
-        if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", content, &mut message_count) {
-            eprintln!("Warning: Failed to save assistant message: {}", e);
-        }
-    }
-
-    let chat_response = ChatResponse {
-        conversation_id,
-        content: response.content.unwrap_or_default(),
-    };
-
-    Ok(Json(serde_json::to_value(chat_response).unwrap()))
-}
-
-async fn handle_chat_stream(
-    db: Arc<Db>,
-    req: ChatRequest,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // Generate unique request ID
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -104,10 +27,8 @@ async fn handle_chat_stream(
     // Create event receiver
     let rx = events::create_channel(request_id.clone());
 
-    // Spawn task execution in background
     tokio::spawn(async move {
         let conversation = Conversation::new(req.device_id);
-        let task = Task::Chat;
         let events = events::EventSender::new(request_id.clone());
 
         let conversation_id = match req.conversation_id {
@@ -118,9 +39,8 @@ async fn handle_chat_stream(
                     content: Some(req.message.clone()),
                     tool_calls: None,
                 };
-
-                match conversation.init(&user_message, &task).await {
-                    Ok((conv_id, _th_id)) => conv_id,
+                match Conversation::new(req.device_id).init(&user_message, &Task::Router).await {
+                    Ok((conv_id, _)) => conv_id,
                     Err(e) => {
                         events.error(format!("Failed to initialize conversation: {}", e));
                         return;
@@ -129,27 +49,61 @@ async fn handle_chat_stream(
             }
         };
 
-        let user_message = Message {
-            role: "user".to_string(),
-            content: Some(req.message.clone()),
-            tool_calls: None,
-        };
+        let mut messages = conversation.get_messages(conversation_id).unwrap_or_default();
+        let mut message_count = messages.len() as u32;
 
-        let mut message_count = 0;
         if let Err(e) = conversation.add_message(Some(conversation_id), "user", &req.message, &mut message_count) {
             eprintln!("Warning: Failed to save user message: {}", e);
         }
 
-        let messages = vec![user_message];
+        messages.push(Message {
+            role: "user".to_string(),
+            content: Some(req.message.clone()),
+            tool_calls: None,
+        });
 
-        // Execute with event sender
-        match task.execute_with_prompt(
-            messages,
+        // Run router to get pipeline plan
+        let router_response = Task::Router.execute_with_prompt(
+            vec![Message {
+                role: "user".to_string(),
+                content: Some(req.message.clone()),
+                tool_calls: None,
+            }],
             &db,
             req.device_id,
             req.device_key.clone(),
-            true,
-            Some(events.clone())
+            false, // router doesn't stream
+            None,
+        ).await;
+
+        // Parse pipeline steps from router tool call
+        let steps: Vec<PipelineStep> = match router_response {
+            Ok(response) => {
+                // Router should have called plan_tasks — extract steps from tool call args
+                if let Some(tool_calls) = &response.tool_calls {
+                    if let Some(call) = tool_calls.first() {
+                        serde_json::from_value(call.function.arguments["steps"].clone())
+                            .unwrap_or_else(|_| default_chat_step(&req.message))
+                    } else {
+                        default_chat_step(&req.message)
+                    }
+                } else {
+                    default_chat_step(&req.message)
+                }
+            }
+            Err(e) => {
+                eprintln!("Router failed: {}", e);
+                default_chat_step(&req.message)
+            }
+        };
+
+        // Execute the pipeline
+        match Task::execute_pipeline(
+            steps,
+            &db,
+            req.device_id,
+            req.device_key.clone(),
+            Some(events.clone()),
         ).await {
             Ok(response) => {
                 if let Some(content) = &response.content {
@@ -160,7 +114,7 @@ async fn handle_chat_stream(
                 events.complete(conversation_id);
             }
             Err(e) => {
-                events.error(format!("Task execution failed: {}", e));
+                events.error(format!("Pipeline execution failed: {}", e));
             }
         }
     });
@@ -336,7 +290,7 @@ pub async fn handle_queue_memory_extraction(Json(req): Json<QueueJobRequest>) ->
 }
 
 pub async fn handle_tool_execution(Json(req): Json<ToolExecutionRequest>) -> impl IntoResponse {
-    match registry::use_tool(&req.tool_name, &req.arguments) {
+    match artificer_shared::use_tool(&req.tool_name, &req.arguments) {
         Ok(result) => (
             StatusCode::OK,
             Json(json!({ "result": result }))
@@ -346,6 +300,12 @@ pub async fn handle_tool_execution(Json(req): Json<ToolExecutionRequest>) -> imp
             Json(json!({ "error": format!("Tool execution failed: {}", e) }))
         ),
     }
+}
+fn default_chat_step(message: &str) -> Vec<PipelineStep> {
+    vec![PipelineStep {
+        task: "chat".to_string(),
+        directions: message.to_string(),
+    }]
 }
 pub async fn health_check() -> &'static str {
     "Artificer is running"

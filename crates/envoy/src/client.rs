@@ -7,18 +7,12 @@ pub struct ChatRequest {
     pub device_id: i64,
     pub device_key: String,
     pub conversation_id: Option<u64>,
-    pub message: String,
-    stream: Option<bool>,
+    pub message: String
 }
 #[derive(Deserialize, Debug)]
 pub struct RegisterDeviceResponse {
     pub device_id: i64,
     pub device_key: String
-}
-#[derive(Deserialize, Debug)]
-pub struct ChatResponse {
-    pub conversation_id: u64,
-    pub content: String,
 }
 #[derive(Clone)]
 pub struct ApiClient {
@@ -40,40 +34,6 @@ impl ApiClient {
         device_key: String,
         conversation_id: Option<u64>,
         message: String,
-    ) -> Result<ChatResponse> {
-        let url = format!("{}/chat", self.base_url);
-
-        let request = ChatRequest {
-            device_id,
-            device_key,
-            conversation_id,
-            message,
-            stream: None
-        };
-
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
-
-        // Check for device not found / auth error
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::NOT_FOUND
-            || response.status() == reqwest::StatusCode::BAD_REQUEST {
-            return Err(anyhow::anyhow!("Device not found - please re-register"));
-        }
-
-        let response = response.json::<ChatResponse>().await?;
-        Ok(response)
-    }
-
-    pub async fn chat_stream(
-        &self,
-        device_id: i64,
-        device_key: String,
-        conversation_id: Option<u64>,
-        message: String,
         mut event_handler: impl FnMut(ChatEvent),
     ) -> Result<u64> {
         let url = format!("{}/chat", self.base_url);
@@ -83,7 +43,6 @@ impl ApiClient {
             device_key,
             conversation_id,
             message,
-            stream: Some(true),
         };
 
         let response = self.client

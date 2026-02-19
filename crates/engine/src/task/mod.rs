@@ -1,12 +1,11 @@
 pub mod specialist;
 pub mod worker;
 pub mod background;
-mod registry;
 pub mod conversation;
 
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
-use artificer_shared::{db::Db, rusqlite, registry as tool_registry};
+use artificer_shared::{db::Db, rusqlite, tools as tool_registry};
 use crate::Message;
 use specialist::{ExecutionContext, ResponseMessage, Specialist};
 use crate::events::EventSender;
@@ -17,6 +16,12 @@ pub enum TaskType {
     Singular,
     /// Agentic loop, handle tool calls until completion
     AgenticLoop,
+}
+
+#[derive(Deserialize)]
+pub struct PipelineStep {
+    pub task: String,
+    pub directions: String,
 }
 
 // ============================================================================
@@ -166,40 +171,6 @@ define_tasks! {
                        Be precise and concise.",
         switches_to: [],
     },
-    Chat {
-        title: "chat",
-        description: "Interactive chat with tool calling",
-        task_id: 2,
-        specialist: Specialist::ToolCaller,
-        context: ExecutionContext::Interactive,
-        task_type: TaskType::AgenticLoop,
-        instructions: "You are Artificer, a helpful AI assistant. Engage naturally with the user, \
-                       provide thoughtful responses, and use available shared when appropriate. \
-                       Maintain context from the conversation history.",
-        switches_to: [Research, CodeReview],
-    },
-    CodeReview {
-        title: "code_review",
-        description: "Review code for issues and improvements",
-        task_id: 4,
-        specialist: Specialist::Coder,
-        context: ExecutionContext::Interactive,
-        task_type: TaskType::AgenticLoop,
-        instructions: "Review the provided code for potential issues, improvements, and best practices. \
-                       Provide constructive feedback with specific suggestions.",
-        switches_to: [Chat],
-    },
-    Research {
-        title: "research",
-        description: "Deep research with reasoning",
-        task_id: 3,
-        specialist: Specialist::Reasoner,
-        context: ExecutionContext::Interactive,
-        task_type: TaskType::AgenticLoop,
-        instructions: "Research the given topic thoroughly. Provide well-sourced information, \
-                       consider multiple perspectives, and organize findings clearly.",
-        switches_to: [Chat],
-    },
     MemoryExtraction {
         title: "memory_extraction",
         description: "Extract learnings from conversations",
@@ -219,8 +190,88 @@ define_tasks! {
                        Only extract facts that will remain true across sessions. Ignore ephemeral details.",
         switches_to: [],
     },
+    Router {
+        title: "router",
+        description: "Routes user requests to the appropriate task pipeline",
+        task_id: 5,
+        specialist: Specialist::Reasoner,
+        context: ExecutionContext::Interactive,
+        task_type: TaskType::Singular,
+        instructions: "You are a request router for Artificer, a local AI assistant. \
+                       Your only job is to analyze the user's message and decide how to handle it.\
+                       \n\nYou have one tool: plan_tasks.\
+                       \n\nALWAYS call plan_tasks. Never respond with plain text.\
+                       \n\nROUTING RULES:\
+                       \n- Casual conversation, greetings, simple factual questions → [{task: 'chat', directions: '<original message>'}]\
+                       \n- Anything requiring web search, news, current events, research → [{task: 'web_research', directions: '<specific search instructions>'}]\
+                       \n- Research that needs summarizing → [{task: 'web_research', directions: '...'}, {task: 'summarizer', directions: 'Summarize the above into a clear response'}]\
+                       \n- File operations → [{task: 'file_smith', directions: '<specific file instructions>'}]\
+                       \n\nDIRECTIONS:\
+                       \n- Write directions as specific instructions for each specialist, not a copy of the user message.\
+                       \n- For web_research, be specific: 'Search for top news headlines today and fetch 2-3 articles for full content'\
+                       \n- For summarizer, specify the desired format and length.\
+                       \n- Keep directions concise but complete.",
+        switches_to: [],
+    },
+    Chat {
+        title: "chat",
+        description: "Conversational chat with memory access",
+        task_id: 2,
+        specialist: Specialist::ToolCaller,
+        context: ExecutionContext::Interactive,
+        task_type: TaskType::AgenticLoop,
+        instructions: "You are Artificer, a local AI assistant. You handle casual conversation \
+                       and simple factual questions.\
+                       \n\nYou have access to the Archivist tool to look up past conversations \
+                       and user preferences when relevant.\
+                       \n\nBEHAVIOR:\
+                       \n- Be concise and direct. Match the length of your response to the complexity of the request.\
+                       \n- A greeting gets a greeting. A simple question gets a short answer.\
+                       \n- Use Archivist only when the user references past conversations or you need context.\
+                       \n- Do not attempt web searches or file operations — those are handled by specialists.\
+                       \n- If the user asks for something outside your scope, let them know it will be handled.",
+        switches_to: [],
+    },
+    WebResearcher {
+        title: "web_research",
+        description: "Web research using Brave Search",
+        task_id: 6,
+        specialist: Specialist::ToolCaller,
+        context: ExecutionContext::Interactive,
+        task_type: TaskType::AgenticLoop,
+        instructions: "You are a web research specialist. You have access to Brave Search tools.\
+                       \n\nTOOLS:\
+                       \n- WebSearch::search — general web search\
+                       \n- WebSearch::search_news — news and current events (use this for anything time-sensitive)\
+                       \n- WebSearch::fetch_page — fetch full article content from a URL\
+                       \n\nBEHAVIOR:\
+                       \n- Always complete the full research cycle. Search → fetch relevant articles → synthesize.\
+                       \n- Never return raw search results to the user. Always read the content and summarize.\
+                       \n- For news requests, use search_news first, then fetch 2-3 of the most relevant articles.\
+                       \n- For general research, use search first, then fetch the most authoritative sources.\
+                       \n- If the first search is not sufficient, try different search terms before giving up.\
+                       \n- Return a well-organized response with sources cited at the end.\
+                       \n- If content cannot be fetched, note it and move on to the next source.",
+        switches_to: [],
+    },
+    Summarizer {
+        title: "summarizer",
+        description: "Synthesize and summarize content into clear responses",
+        task_id: 7,
+        specialist: Specialist::Reasoner,
+        context: ExecutionContext::Interactive,
+        task_type: TaskType::Singular,
+        instructions: "You are a summarization specialist. You receive content from previous pipeline \
+                       steps and synthesize it into a clear, well-organized response.\
+                       \n\nBEHAVIOR:\
+                       \n- Follow the directions provided about format and length.\
+                       \n- Preserve important details while cutting noise.\
+                       \n- Organize information logically with clear structure.\
+                       \n- Cite sources when they are provided in the context.\
+                       \n- Never add information not present in the provided content.",
+        switches_to: [],
+    },
 }
-
 // ============================================================================
 // TASK IMPLEMENTATION
 // ============================================================================
@@ -418,7 +469,7 @@ impl Task {
                     use artificer_shared::executor::ToolExecutor;
                     use artificer_shared::ToolLocation;
 
-                    let result = match artificer_shared::registry::get_tool_schema(tool_name) {
+                    let result = match artificer_shared::tools::get_tool_schema(tool_name) {
                         Ok(schema) => {
                             let executor = match schema.location {
                                 ToolLocation::Server => ToolExecutor::local(),
@@ -441,7 +492,11 @@ impl Task {
                         }
                     };
 
-                    println!("[Tool result: {}]", result);
+                    if let Some(ref ev) = events {
+                        ev.tool_result(self.title(), tool_name, result.clone());
+                    } else {
+                        println!("[Tool result: {}]", result);
+                    }
 
                     messages.push(Message {
                         role: "assistant".to_string(),
@@ -455,5 +510,50 @@ impl Task {
                 return Ok(response);
             }
         }
+    }
+    pub async fn execute_pipeline(
+        steps: Vec<PipelineStep>,
+        db: &Db,
+        device_id: i64,
+        device_key: String,
+        events: Option<EventSender>,
+    ) -> Result<ResponseMessage> {
+        let mut context = String::new();
+
+        for step in steps {
+            let task = Task::from_str(&step.task)
+                .ok_or_else(|| anyhow::anyhow!("Unknown task in pipeline: {}", step.task))?;
+
+            if let Some(ref ev) = events {
+                ev.task_switch("pipeline", task.title());
+            }
+
+            let user_content = if context.is_empty() {
+                step.directions.clone()
+            } else {
+                format!("{}\n\n# Context from previous step:\n{}", step.directions, context)
+            };
+
+            let response = task.execute_with_prompt(
+                vec![Message {
+                    role: "user".to_string(),
+                    content: Some(user_content),
+                    tool_calls: None,
+                }],
+                db,
+                device_id,
+                device_key.clone(),
+                events.is_some(),
+                events.clone(),
+            ).await?;
+
+            context = response.content.clone().unwrap_or_default();
+        }
+
+        Ok(ResponseMessage {
+            role: "assistant".to_string(),
+            content: Some(context),
+            tool_calls: None,
+        })
     }
 }

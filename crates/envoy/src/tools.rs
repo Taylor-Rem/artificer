@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{extract::Json, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use artificer_shared::registry;
+use artificer_shared::tools;
 use std::sync::Arc;
 
 struct ToolServerState {
@@ -30,7 +30,7 @@ async fn handle_tool_execution(
         );
     }
 
-    match registry::use_tool(&req.tool_name, &req.arguments) {
+    match tools::use_tool(&req.tool_name, &req.arguments) {
         Ok(result) => (StatusCode::OK, Json(json!({ "result": result }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

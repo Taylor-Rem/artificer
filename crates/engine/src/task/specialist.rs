@@ -1,4 +1,3 @@
-// src/task/specialist.rs
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use anyhow::Result;
@@ -7,7 +6,7 @@ use futures_util::StreamExt;
 use std::io::{self, Write};
 
 use crate::Message;
-use artificer_shared::Tool;
+use artificer_shared::{Tool, tools as tool_registry};
 use crate::events::EventSender;
 use crate::task::Task;
 
@@ -86,26 +85,17 @@ impl Specialist {
     pub fn model(&self) -> &'static str {
         match self {
             Specialist::Quick => "qwen3:8b",
-            Specialist::ToolCaller | Specialist::Reasoner | Specialist::Coder => "qwen3:32b",
+            Specialist::ToolCaller | Specialist::Reasoner | Specialist::Coder => "qwen2.5:32b-instruct-q4_K_M",
         }
     }
 
     pub fn tools(&self, current_task: &Task) -> Vec<Tool> {
-        use artificer_shared::registry as tool_registry;
-        use crate::task::registry as task_registry;
-
-        let mut tools = match self {
-            Specialist::ToolCaller => tool_registry::get_tools(),
-            Specialist::Coder => tool_registry::get_tools_for(&["FileSmith"]),
-            Specialist::Reasoner | Specialist::Quick => vec![],
-        };
-
-        // Add task switching capability if this is an interactive task
-        if matches!(current_task.execution_context(), ExecutionContext::Interactive) {
-            tools.extend(task_registry::get_available_tasks(current_task));
+        match current_task {
+            Task::Router => tool_registry::get_tools_for(&["Router"]),
+            Task::Chat => tool_registry::get_tools_for(&["Archivist"]),
+            Task::WebResearcher => tool_registry::get_tools_for(&["WebSearch"]),
+            _ => vec![],
         }
-
-        tools
     }
 
     pub async fn execute(

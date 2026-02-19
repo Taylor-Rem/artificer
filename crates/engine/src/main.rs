@@ -7,6 +7,7 @@ use artificer_shared::db;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     println!("Starting Artificer...\n");
 
     // Initialize database
