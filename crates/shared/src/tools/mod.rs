@@ -3,30 +3,26 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::schemas::{ToolHandler, ToolSchema, Tool, ToolLocation};
-use crate::toolbelts::{file_smith, archivist, web_search};
+use crate::schemas::{Tool, ToolHandler, ToolLocation, ToolSchema};
+
+pub mod toolbelts;
 
 static TOOL_REGISTRY: Lazy<HashMap<&'static str, ToolHandler>> = Lazy::new(|| {
     let mut map = HashMap::new();
 
-    for (name, handler) in file_smith::TOOL_ENTRIES {
-        map.insert(*name, *handler);
-    }
-    for (name, handler) in archivist::TOOL_ENTRIES {
-        map.insert(*name, *handler);
-    }
-    for (name, handler) in web_search::TOOL_ENTRIES {
-        map.insert(*name, *handler);
-    }
-
+    for (name, handler) in toolbelts::file_smith::TOOL_ENTRIES { map.insert(*name, *handler); }
+    for (name, handler) in toolbelts::archivist::TOOL_ENTRIES { map.insert(*name, *handler); }
+    for (name, handler) in toolbelts::web_search::TOOL_ENTRIES { map.insert(*name, *handler); }
+    for (name, handler) in toolbelts::router::TOOL_ENTRIES { map.insert(*name, *handler); }
     map
 });
 
 static TOOL_SCHEMAS: Lazy<Vec<ToolSchema>> = Lazy::new(|| {
     let mut schemas = Vec::new();
-    schemas.extend(file_smith::TOOL_SCHEMAS.iter().cloned());
-    schemas.extend(archivist::TOOL_SCHEMAS.iter().cloned());
-    schemas.extend(web_search::TOOL_SCHEMAS.iter().cloned()); 
+    schemas.extend(toolbelts::file_smith::TOOL_SCHEMAS.iter().cloned());
+    schemas.extend(toolbelts::archivist::TOOL_SCHEMAS.iter().cloned());
+    schemas.extend(toolbelts::web_search::TOOL_SCHEMAS.iter().cloned());
+    schemas.extend(toolbelts::router::TOOL_SCHEMAS.iter().cloned());
     schemas
 });
 

@@ -10,7 +10,7 @@ pub async fn single_message(
     message: String,
 ) -> Result<()> {
     match client
-        .chat_stream(device_id, device_key.clone(), None, message, |event| {
+        .chat(device_id, device_key.clone(), None, message, |event| {
             handle_event(&event)
         })
         .await
@@ -62,7 +62,7 @@ pub async fn interactive_chat(client: ApiClient, device_id: i64, device_key: Str
 
         println!(); // Blank line before response
 
-        match client.chat_stream(
+        match client.chat(
             device_id,
             device_key.clone(),
             conversation_id,

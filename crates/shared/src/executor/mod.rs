@@ -20,8 +20,8 @@ impl ToolExecutor {
     }
 
     /// Create a remote executor (sends tool calls to envoy via HTTP)
-    pub fn remote(base_url: String, device_id: i64, device_key: String) -> Self {
-        Self::Remote { base_url, device_id, device_key }
+    pub fn remote(base_url: String, device_id: i64, device_key: String,) -> Self {
+        Self::Remote { base_url, device_id, device_key}
     }
 
     /// Execute a tool with the configured strategy
@@ -29,7 +29,7 @@ impl ToolExecutor {
         match self {
             ToolExecutor::Local => {
                 // Direct local execution
-                crate::registry::use_tool(tool_name, args)
+                crate::tools::use_tool(tool_name, args)
             }
             ToolExecutor::Remote { base_url, device_id, device_key } => {
                 // Remote execution via HTTP
@@ -44,7 +44,7 @@ impl ToolExecutor {
         device_id: i64,
         device_key: &str,
         tool_name: &str,
-        args: &Value,
+        args: &Value
     ) -> Result<String> {
         let client = reqwest::Client::new();
         let url = format!("{}/shared/execute", base_url);

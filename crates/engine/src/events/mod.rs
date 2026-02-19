@@ -58,7 +58,7 @@ impl EventSender {
     }
 
     pub fn tool_result(&self, task: &str, tool: &str, result: String) {
-        let truncated = result.len() > 500;
+        let truncated = result.len() > 5000;
         let display_result = if truncated {
             format!("{}... ({} chars total)", &result[..500], result.len())
         } else {
