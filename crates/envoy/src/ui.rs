@@ -1,5 +1,3 @@
-// crates/envoy/src/ui.rs
-
 use artificer_shared::events::ChatEvent;
 use crate::client::ApiClient;
 use anyhow::Result;
