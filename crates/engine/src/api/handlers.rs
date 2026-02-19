@@ -148,8 +148,8 @@ async fn handle_chat_stream(
             &db,
             req.device_id,
             req.device_key.clone(),
-            true,  // streaming = true
-            Some(events.clone())  // Pass event sender
+            true,
+            Some(events.clone())
         ).await {
             Ok(response) => {
                 if let Some(content) = &response.content {

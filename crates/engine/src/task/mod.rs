@@ -383,8 +383,11 @@ impl Task {
                     let tool_name = &tool_call.function.name;
                     let args = &tool_call.function.arguments;
 
-                    println!("[Calling tool: {} with args: {}]", tool_name, args);
-
+                    if let Some(ref ev) = events {
+                        ev.tool_call(self.title(), tool_name, args.clone());
+                    } else {
+                        println!("[Calling tool: {} with args: {}]", tool_name, args);
+                    }
                     if tool_name == "switch_task" {
                         let target_task_name = args["task"].as_str()
                             .ok_or_else(|| anyhow::anyhow!("Missing task name"))?;
@@ -392,7 +395,11 @@ impl Task {
                         let target_task = Task::from_str(target_task_name)
                             .ok_or_else(|| anyhow::anyhow!("Unknown task: {}", target_task_name))?;
 
-                        println!("\n[Switching from {} to {}]\n", self.title(), target_task.title());
+                        if let Some(ref ev) = events {
+                            ev.task_switch(self.title(), target_task.title());
+                        } else {
+                            println!("\n[Switching from {} to {}]\n", self.title(), target_task.title());
+                        }
 
                         messages.push(Message {
                             role: "system".to_string(),

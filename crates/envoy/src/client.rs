@@ -48,7 +48,7 @@ impl ApiClient {
             device_key,
             conversation_id,
             message,
-            stream: Some(true)
+            stream: None
         };
 
         let response = self.client
@@ -83,7 +83,7 @@ impl ApiClient {
             device_key,
             conversation_id,
             message,
-            stream: None,
+            stream: Some(true),
         };
 
         let response = self.client
