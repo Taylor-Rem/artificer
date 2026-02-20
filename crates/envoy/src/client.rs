@@ -88,6 +88,16 @@ impl ApiClient {
         Ok(final_conv_id)
     }
 
+    pub async fn verify_device(&self, device_id: i64, device_key: &str) -> Result<bool> {
+        let url = format!("{}/devices/verify", self.base_url);
+        let response = self.client
+            .post(&url)
+            .json(&serde_json::json!({ "device_id": device_id, "device_key": device_key }))
+            .send()
+            .await?;
+        Ok(response.status().is_success())
+    }
+
     pub async fn register_device(&self, device_name: String) -> Result<(i64, String)> {
         let url = format!("{}/devices/register", self.base_url);
 

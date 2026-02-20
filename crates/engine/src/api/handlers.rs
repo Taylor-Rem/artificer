@@ -307,6 +307,10 @@ fn default_chat_step(message: &str) -> Vec<PipelineStep> {
         directions: message.to_string(),
     }]
 }
+pub async fn handle_verify_device() -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({ "valid": true })))
+}
+
 pub async fn health_check() -> &'static str {
     "Artificer is running"
 }
