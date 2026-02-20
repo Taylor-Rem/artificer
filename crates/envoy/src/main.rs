@@ -24,22 +24,36 @@ async fn main() -> Result<()> {
     // Create API client
     let client = ApiClient::new(config.server_url.clone());
 
-    // Register device if needed
-    let (device_id, device_key) = match (config.device_id, config.device_key.clone()) {
-        (Some(id), Some(key)) => (id, key),
-        _ => {
-            println!("Registering device '{}'...", config.device_name);
-            match client.register_device(config.device_name.clone()).await {
-                Ok((id, key)) => {
-                    config.set_device_credentials(id, key.clone())?;
-                    println!("Device registered with ID: {}\n", id);
-                    (id, key)
+    // Register device if needed, or verify stored credentials are still valid
+    let valid_creds = match (config.device_id, config.device_key.clone()) {
+        (Some(id), Some(key)) => {
+            match client.verify_device(id, &key).await {
+                Ok(true) => Some((id, key)),
+                _ => {
+                    println!("Stored credentials are invalid, re-registering...");
+                    config.device_id = None;
+                    config.device_key = None;
+                    None
                 }
-                Err(e) => {
-                    eprintln!("Failed to connect to Artificer at {}: {}", config.server_url, e);
-                    eprintln!("Is the Artificer server running?");
-                    return Err(e);
-                }
+            }
+        }
+        _ => None,
+    };
+
+    let (device_id, device_key) = if let Some(creds) = valid_creds {
+        creds
+    } else {
+        println!("Registering device '{}'...", config.device_name);
+        match client.register_device(config.device_name.clone()).await {
+            Ok((id, key)) => {
+                config.set_device_credentials(id, key.clone())?;
+                println!("Device registered with ID: {}\n", id);
+                (id, key)
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to Artificer at {}: {}", config.server_url, e);
+                eprintln!("Is the Artificer server running?");
+                return Err(e);
             }
         }
     };

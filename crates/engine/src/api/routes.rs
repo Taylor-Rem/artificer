@@ -12,6 +12,7 @@ pub fn create_router(db: Arc<Db>) -> Router<Arc<Db>> {
     let protected = Router::new()
         .route("/chat", post(handlers::handle_chat))
         .route("/conversations", get(handlers::handle_list_conversations))
+        .route("/devices/verify", post(handlers::handle_verify_device))
         .route("/jobs/summarize", post(handlers::handle_queue_summarization))
         .route("/jobs/extract_memory", post(handlers::handle_queue_memory_extraction))
         .route("/shared/execute", post(handlers::handle_tool_execution))
