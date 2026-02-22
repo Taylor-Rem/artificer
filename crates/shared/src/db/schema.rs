@@ -62,29 +62,6 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_conversation_keywords_conv ON conversation_keywords(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_conversation_keywords_keyword ON conversation_keywords(keyword_id);
 
-        -- Task execution history (device-specific)
-        CREATE TABLE IF NOT EXISTS task_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id INTEGER NOT NULL,
-            task_id INTEGER NOT NULL,
-            conversation_id INTEGER,
-            location TEXT NOT NULL,
-            created INTEGER NOT NULL,
-            completed INTEGER,
-            status TEXT NOT NULL DEFAULT 'running',
-            FOREIGN KEY (device_id) REFERENCES devices(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            FOREIGN KEY (task_id) REFERENCES tasks(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                ON DELETE SET NULL
-                ON UPDATE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_task_history_device ON task_history(device_id);
-        CREATE INDEX IF NOT EXISTS idx_task_history_conversation ON task_history(conversation_id);
-
         -- Messages (device-specific via conversation)
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,12 +77,11 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 
         -- Local task data (device-specific)
-        CREATE TABLE IF NOT EXISTS local_task_data (
+        CREATE TABLE IF NOT EXISTS local_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER NOT NULL,
             task_id INTEGER NOT NULL,
             conversation_id INTEGER,
-            task_history_id INTEGER,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
             memory_type TEXT NOT NULL CHECK(memory_type IN ('fact', 'preference', 'context')),
@@ -123,13 +99,10 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
                 ON DELETE CASCADE
                 ON UPDATE CASCADE,
-            FOREIGN KEY (task_history_id) REFERENCES task_history(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE
         );
-        CREATE INDEX IF NOT EXISTS idx_local_task_data_device ON local_task_data(device_id);
-        CREATE INDEX IF NOT EXISTS idx_local_task_data_task ON local_task_data(device_id, task_id);
-        CREATE INDEX IF NOT EXISTS idx_local_task_data_type ON local_task_data(memory_type);
+        CREATE INDEX IF NOT EXISTS idx_local_data_device ON local_data(device_id);
+        CREATE INDEX IF NOT EXISTS idx_local_data_task ON local_data(device_id, task_id);
+        CREATE INDEX IF NOT EXISTS idx_local_data_type ON local_data(memory_type);
 
         -- Background jobs (track which device queued)
         CREATE TABLE IF NOT EXISTS background (
@@ -174,8 +147,8 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         SELECT th.* FROM task_history th
         WHERE th.device_id = (SELECT value FROM runtime_context WHERE key = 'current_device_id');
 
-        CREATE VIEW IF NOT EXISTS device_local_task_data AS
-        SELECT ltd.* FROM local_task_data ltd
+        CREATE VIEW IF NOT EXISTS device_local_data AS
+        SELECT ltd.* FROM local_data ltd
         WHERE ltd.device_id = (SELECT value FROM runtime_context WHERE key = 'current_device_id');
 
         CREATE VIEW IF NOT EXISTS device_conversation_keywords AS

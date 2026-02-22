@@ -72,14 +72,13 @@ pub async fn handle_chat(
             &db,
             req.device_id,
             req.device_key.clone(),
-            false, // router doesn't stream
+            false,
             None,
         ).await;
 
         // Parse pipeline steps from router tool call
         let steps: Vec<PipelineStep> = match router_response {
             Ok(response) => {
-                // Router should have called plan_tasks — extract steps from tool call args
                 if let Some(tool_calls) = &response.tool_calls {
                     if let Some(call) = tool_calls.first() {
                         serde_json::from_value(call.function.arguments["steps"].clone())
@@ -257,7 +256,6 @@ pub async fn handle_list_conversations(
 
     (StatusCode::OK, Json(serde_json::to_value(ListConversationsResponse { conversations }).unwrap()))
 }
-// crates/engine/src/api/handlers.rs
 
 pub async fn handle_queue_summarization(Json(req): Json<QueueJobRequest>) -> impl IntoResponse {
     let conversation = Conversation::new(req.device_id);

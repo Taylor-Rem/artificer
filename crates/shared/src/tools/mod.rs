@@ -67,3 +67,10 @@ pub fn get_tool_schema(name: &str) -> anyhow::Result<&'static ToolSchema> {
         .find(|s| s.name == name)
         .ok_or_else(|| anyhow::anyhow!("Tool schema '{}' not found", name))
 }
+
+pub fn get_tool_schemas_for(prefixes: &[&str]) -> Vec<&'static ToolSchema> {
+    TOOL_SCHEMAS
+        .iter()
+        .filter(|s| prefixes.iter().any(|p| s.name.starts_with(p)))
+        .collect()
+}
