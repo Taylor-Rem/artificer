@@ -31,17 +31,6 @@ pub fn execute<'a>(
         let conversation_id = args["conversation_id"].as_i64()
             .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
-        // Get task types used in this conversation
-        let task_info_json = ctx.db.query(
-            "SELECT DISTINCT t.title, t.id
-             FROM task_history th
-             JOIN tasks t ON th.task_id = t.id
-             WHERE th.conversation_id = ?1",
-            rusqlite::params![conversation_id]
-        )?;
-
-        let task_info: Vec<Value> = serde_json::from_str(&task_info_json)?;
-
         // Get all messages in the conversation
         let messages_json = ctx.db.query(
             "SELECT role, message FROM messages
@@ -58,19 +47,9 @@ pub fn execute<'a>(
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Build context about tasks used
-        let task_context = if task_info.is_empty() {
-            "chat".to_string()
-        } else {
-            task_info.iter()
-                .filter_map(|t| t["title"].as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
         // Ask LLM to extract both memories AND keywords
         let extraction_prompt = format!(
-            "Tasks used: {}\n\nConversation:\n{}\n\n\
+            "Conversation:\n{}\n\n\
             Extract two types of information from this conversation:\n\n\
             1. MEMORIES - Key information classified as:\n\
             - FACT: Objective, verifiable information (OS, paths, shared, project details)\n\
@@ -97,7 +76,7 @@ pub fn execute<'a>(
             - Only extract information that will be useful later\n\
             - Extract 3-10 keywords that best describe this conversation\n\
             - Ignore ephemeral chat content",
-            task_context, conversation_text
+            conversation_text
         );
 
         let llm_messages = vec![
