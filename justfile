@@ -1,5 +1,4 @@
 # Run engine with hot reload
-# Run engine with hot reload
 dev-engine:
     cargo watch \
       --why \

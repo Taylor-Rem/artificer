@@ -240,10 +240,6 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::AgenticLoop,
         instructions: "You are a web research specialist. You have access to Brave Search tools.\
-                       \n\nTOOLS:\
-                       \n- WebSearch::search — general web search\
-                       \n- WebSearch::search_news — news and current events (use this for anything time-sensitive)\
-                       \n- WebSearch::fetch_page — fetch full article content from a URL\
                        \n\nBEHAVIOR:\
                        \n- Always complete the full research cycle. Search → fetch relevant articles → synthesize.\
                        \n- Never return raw search results to the user. Always read the content and summarize.\
@@ -254,6 +250,22 @@ define_tasks! {
                        \n- If content cannot be fetched, note it and move on to the next source.",
         switches_to: [],
     },
+    FileSmith {
+    title: "file_smith",
+    description: "File and directory operations on the client device",
+    task_id: 8,
+    specialist: Specialist::ToolCaller,
+    context: ExecutionContext::Interactive,
+    task_type: TaskType::AgenticLoop,
+    instructions: "You are a file system specialist. You have access to FileSmith tools \
+                   that execute on the user's local device.\
+                   \n\nBEHAVIOR:\
+                   \n- Confirm before destructive operations (delete, overwrite) unless explicitly told not to.\
+                   \n- Use file_exists before reading or modifying to avoid errors.\
+                   \n- When writing code or structured content, prefer replace_text or insert_at_line over full rewrites.\
+                   \n- Always report what you did with paths and results.",
+    switches_to: [],
+},
     Summarizer {
         title: "summarizer",
         description: "Synthesize and summarize content into clear responses",
@@ -280,10 +292,40 @@ impl Task {
     pub fn build_system_prompt(&self, db: &Db, device_id: i64) -> Result<String> {
         let base_instructions = self.instructions();
 
+        let tool_schemas = tool_registry::get_tool_schemas_for(match self {
+            Task::Router => &["Router"],
+            Task::Chat => &["Archivist"],
+            Task::WebResearcher => &["WebSearch"],
+            Task::FileSmith => &["FileSmith"],
+            _ => &[],
+        });
+
+        let mut prompt = base_instructions.to_string();
+
+        if !tool_schemas.is_empty() {
+            prompt.push_str("\n\n# Available Tools\n");
+            for schema in &tool_schemas {
+                prompt.push_str(&format!("\n## {}\n", schema.name));
+                prompt.push_str(&format!("{}\n", schema.description));
+                if !schema.parameters.is_empty() {
+                    prompt.push_str("Parameters:\n");
+                    for param in &schema.parameters {
+                        let required = if param.required { "required" } else { "optional" };
+                        prompt.push_str(&format!(
+                            "- `{}` ({}{}): {}\n",
+                            param.name, param.type_name,
+                            if param.required { ", required" } else { ", optional" },
+                            param.description
+                        ));
+                    }
+                }
+            }
+        }
+
         // Get memories for this device and task
         let memories = db.query(
             "SELECT key, value, memory_type, confidence
-             FROM local_task_data
+             FROM local_data
              WHERE device_id = ?1
                AND task_id IN (
                    SELECT id FROM tasks WHERE title IN (?2, 'general')

@@ -109,10 +109,10 @@ impl WebSearch {
                     "Accept",
                     "application/json".parse().unwrap(),
                 );
-                headers.insert(
-                    "Accept-Encoding",
-                    "gzip".parse().unwrap(),
-                );
+                // headers.insert(
+                //     "Accept-Encoding",
+                //     "gzip".parse().unwrap(),
+                // );
                 headers.insert(
                     "X-Subscription-Token",
                     self.api_key.parse().unwrap(),
@@ -187,6 +187,9 @@ impl WebSearch {
         }
 
         let data: serde_json::Value = response.json().await?;
+
+        eprintln!("News API response structure: {}",
+                  serde_json::to_string_pretty(&data).unwrap_or_default());
 
         let mut output = String::new();
         output.push_str(&format!("News results for '{}':\n\n", query));

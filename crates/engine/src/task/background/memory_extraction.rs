@@ -151,7 +151,7 @@ pub fn execute<'a>(
             let target_task_id = if is_general_memory(&memory.key) { 1 } else { 2 };
 
             ctx.db.execute(
-                "INSERT INTO local_task_data
+                "INSERT INTO local_data
                  (device_id, task_id, conversation_id, key, value, memory_type, confidence, created_at, updated_at, last_accessed)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(device_id, task_id, key) DO UPDATE SET

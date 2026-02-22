@@ -94,6 +94,7 @@ impl Specialist {
             Task::Router => tool_registry::get_tools_for(&["Router"]),
             Task::Chat => tool_registry::get_tools_for(&["Archivist"]),
             Task::WebResearcher => tool_registry::get_tools_for(&["WebSearch"]),
+            Task::FileSmith => tool_registry::get_tools_for(&["FileSmith"]),
             _ => vec![],
         }
     }
