@@ -3,12 +3,16 @@ pub mod worker;
 pub mod background;
 pub mod conversation;
 
+use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 use artificer_shared::{db::Db, rusqlite, tools as tool_registry};
-use crate::Message;
 use specialist::{ExecutionContext, ResponseMessage, Specialist};
-use crate::events::EventSender;
+use crate::{
+    Message,
+    events::EventSender,
+    task::conversation::Conversation
+};
 
 #[derive(Debug, Clone)]
 pub enum TaskType {
@@ -134,8 +138,8 @@ define_tasks! {
         context: ExecutionContext::Background,
         task_type: TaskType::Singular,
         instructions: "Generate a concise, descriptive title (3-5 words) for this conversation. \
-                       Use underscores instead of spaces. Use only alphanumeric characters and underscores. \
-                       Return ONLY the title with no explanation, punctuation, or quotes.",
+            Use underscores instead of spaces. Use only alphanumeric characters and underscores. \
+            Return ONLY the title with no explanation, punctuation, or quotes.",
         switches_to: [],
     },
     Summarization {
@@ -145,8 +149,7 @@ define_tasks! {
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
         task_type: TaskType::Singular,
-        instructions: "Summarize the following text concisely in 2-3 sentences. \
-                       Focus on the main points and key takeaways.",
+        instructions: "Summarize the following text concisely in 2-3 sentences. Focus on the main points and key takeaways.",
         switches_to: [],
     },
     Translation {
@@ -156,8 +159,7 @@ define_tasks! {
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
         task_type: TaskType::Singular,
-        instructions: "Translate the following text accurately while preserving tone and meaning. \
-                       Maintain the original formatting and structure.",
+        instructions: "Translate the following text accurately while preserving tone and meaning. Maintain the original formatting and structure.",
         switches_to: [],
     },
     Extraction {
@@ -167,8 +169,7 @@ define_tasks! {
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
         task_type: TaskType::Singular,
-        instructions: "Extract and return only the requested information from the text. \
-                       Be precise and concise.",
+        instructions: "Extract and return only the requested information from the text. Be precise and concise.",
         switches_to: [],
     },
     MemoryExtraction {
@@ -179,15 +180,15 @@ define_tasks! {
         context: ExecutionContext::Background,
         task_type: TaskType::Singular,
         instructions: "Review this conversation and extract key factual information that would be \
-                       useful to remember for future sessions. Focus on:\n\
-                       - User preferences and settings\n\
-                       - System information (OS, paths, configurations)\n\
-                       - Persistent context (project names, file locations)\n\
-                       - Important decisions or constraints\n\n\
-                       Return a JSON array of memories in this format:\n\
-                       [{\"key\": \"operating_system\", \"value\": \"Ubuntu 22.04\"},\n\
-                        {\"key\": \"home_directory\", \"value\": \"/home/tweenson\"}]\n\n\
-                       Only extract facts that will remain true across sessions. Ignore ephemeral details.",
+            useful to remember for future sessions. Focus on:\n\
+            - User preferences and settings\n\
+            - System information (OS, paths, configurations)\n\
+            - Persistent context (project names, file locations)\n\
+            - Important decisions or constraints\n\n\
+            Return a JSON array of memories in this format:\n\
+            [{\"key\": \"operating_system\", \"value\": \"Ubuntu 22.04\"},\n\
+            {\"key\": \"home_directory\", \"value\": \"/home/tweenson\"}]\n\n\
+            Only extract facts that will remain true across sessions. Ignore ephemeral details.",
         switches_to: [],
     },
     Router {
@@ -198,19 +199,33 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::Singular,
         instructions: "You are a request router for Artificer, a local AI assistant. \
-                       Your only job is to analyze the user's message and decide how to handle it.\
-                       \n\nYou have one tool: plan_tasks.\
-                       \n\nALWAYS call plan_tasks. Never respond with plain text.\
-                       \n\nROUTING RULES:\
-                       \n- Casual conversation, greetings, simple factual questions → [{task: 'chat', directions: '<original message>'}]\
-                       \n- Anything requiring web search, news, current events, research → [{task: 'web_research', directions: '<specific search instructions>'}]\
-                       \n- Research that needs summarizing → [{task: 'web_research', directions: '...'}, {task: 'summarizer', directions: 'Summarize the above into a clear response'}]\
-                       \n- File operations → [{task: 'file_smith', directions: '<specific file instructions>'}]\
-                       \n\nDIRECTIONS:\
-                       \n- Write directions as specific instructions for each specialist, not a copy of the user message.\
-                       \n- For web_research, be specific: 'Search for top news headlines today and fetch 2-3 articles for full content'\
-                       \n- For summarizer, specify the desired format and length.\
-                       \n- Keep directions concise but complete.",
+            Your only job is to analyze the user's message and decide how to handle it.\
+            \n\nYou have one tool: plan_tasks.\
+            \n\nALWAYS call plan_tasks. Never respond with plain text.\
+            \n\nROUTING RULES:\
+            \n- Casual conversation, greetings, simple questions → [{task: 'chat', directions: '<message>'}]\
+            \n- Anything requiring web search, current events → [{task: 'web_research', directions: '<specific instructions>'}]\
+            \n- File operations → [{task: 'file_smith', directions: '<specific instructions>'}]\
+            \n\nDIRECTIONS:\
+            \n- Write directions as specific instructions for each specialist.\
+            \n- For web_research, be specific about what to search and fetch.\
+            \n- Keep directions concise but complete.",
+        switches_to: [],
+    },
+    Examiner {
+        title: "examiner",
+        description: "Determines if the pipeline fulfilled the user's request",
+        task_id: 9,
+        specialist: Specialist::Reasoner,
+        context: ExecutionContext::Interactive,
+        task_type: TaskType::Singular,
+        instructions: "You are a quality examiner. You receive a user request and the results \
+            of a pipeline that attempted to fulfill it.\
+            \n\nDetermine whether the request has been fully satisfied by the information gathered.\
+            \n\nCall the report tool with:\
+            \n- fulfilled: true if the request is satisfied, false if important information is missing\
+            \n- reason: brief explanation of your determination\
+            \n\nALWAYS call report. Never respond with plain text.",
         switches_to: [],
     },
     Chat {
@@ -221,15 +236,15 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::AgenticLoop,
         instructions: "You are Artificer, a local AI assistant. You handle casual conversation \
-                       and simple factual questions.\
-                       \n\nYou have access to the Archivist tool to look up past conversations \
-                       and user preferences when relevant.\
-                       \n\nBEHAVIOR:\
-                       \n- Be concise and direct. Match the length of your response to the complexity of the request.\
-                       \n- A greeting gets a greeting. A simple question gets a short answer.\
-                       \n- Use Archivist only when the user references past conversations or you need context.\
-                       \n- Do not attempt web searches or file operations — those are handled by specialists.\
-                       \n- If the user asks for something outside your scope, let them know it will be handled.",
+            and simple factual questions.\
+            \n\nYou have access to the Archivist tool to look up past conversations \
+            and user preferences when relevant.\
+            \n\nBEHAVIOR:\
+            \n- Be concise and direct. Match the length of your response to the complexity of the request.\
+            \n- A greeting gets a greeting. A simple question gets a short answer.\
+            \n- Use Archivist only when the user references past conversations or you need context.\
+            \n- Do not attempt web searches or file operations — those are handled by specialists.\
+            \n- If the user asks for something outside your scope, let them know it will be handled.",
         switches_to: [],
     },
     WebResearcher {
@@ -240,14 +255,14 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::AgenticLoop,
         instructions: "You are a web research specialist. You have access to Brave Search tools.\
-                       \n\nBEHAVIOR:\
-                       \n- Always complete the full research cycle. Search → fetch relevant articles → synthesize.\
-                       \n- Never return raw search results to the user. Always read the content and summarize.\
-                       \n- For news requests, use search_news first, then fetch 2-3 of the most relevant articles.\
-                       \n- For general research, use search first, then fetch the most authoritative sources.\
-                       \n- If the first search is not sufficient, try different search terms before giving up.\
-                       \n- Return a well-organized response with sources cited at the end.\
-                       \n- If content cannot be fetched, note it and move on to the next source.",
+            \n\nBEHAVIOR:\
+            \n- Always complete the full research cycle. Search → fetch relevant articles → synthesize.\
+            \n- Never return raw search results to the user. Always read the content and summarize.\
+            \n- For news requests, use search_news first, then fetch 2-3 of the most relevant articles.\
+            \n- For general research, use search first, then fetch the most authoritative sources.\
+            \n- If the first search is not sufficient, try different search terms before giving up.\
+            \n- Return a well-organized response with sources cited at the end.\
+            \n- If content cannot be fetched, note it and move on to the next source.",
         switches_to: [],
     },
     FileSmith {
@@ -258,12 +273,12 @@ define_tasks! {
     context: ExecutionContext::Interactive,
     task_type: TaskType::AgenticLoop,
     instructions: "You are a file system specialist. You have access to FileSmith tools \
-                   that execute on the user's local device.\
-                   \n\nBEHAVIOR:\
-                   \n- Confirm before destructive operations (delete, overwrite) unless explicitly told not to.\
-                   \n- Use file_exists before reading or modifying to avoid errors.\
-                   \n- When writing code or structured content, prefer replace_text or insert_at_line over full rewrites.\
-                   \n- Always report what you did with paths and results.",
+        that execute on the user's local device.\
+        \n\nBEHAVIOR:\
+        \n- Confirm before destructive operations (delete, overwrite) unless explicitly told not to.\
+        \n- Use file_exists before reading or modifying to avoid errors.\
+        \n- When writing code or structured content, prefer replace_text or insert_at_line over full rewrites.\
+        \n- Always report what you did with paths and results.",
     switches_to: [],
 },
     Summarizer {
@@ -274,13 +289,13 @@ define_tasks! {
         context: ExecutionContext::Interactive,
         task_type: TaskType::Singular,
         instructions: "You are a summarization specialist. You receive content from previous pipeline \
-                       steps and synthesize it into a clear, well-organized response.\
-                       \n\nBEHAVIOR:\
-                       \n- Follow the directions provided about format and length.\
-                       \n- Preserve important details while cutting noise.\
-                       \n- Organize information logically with clear structure.\
-                       \n- Cite sources when they are provided in the context.\
-                       \n- Never add information not present in the provided content.",
+            steps and synthesize it into a clear, well-organized response.\
+            \n\nBEHAVIOR:\
+            \n- Follow the directions provided about format and length.\
+            \n- Preserve important details while cutting noise.\
+            \n- Organize information logically with clear structure.\
+            \n- Cite sources when they are provided in the context.\
+            \n- Never add information not present in the provided content.",
         switches_to: [],
     },
 }
@@ -297,9 +312,11 @@ impl Task {
             Task::Chat => &["Archivist"],
             Task::WebResearcher => &["WebSearch"],
             Task::FileSmith => &["FileSmith"],
+            Task::Examiner => &["Examiner"],
             _ => &[],
         });
 
+        // Start building prompt — ONE variable, never reset
         let mut prompt = base_instructions.to_string();
 
         if !tool_schemas.is_empty() {
@@ -310,10 +327,10 @@ impl Task {
                 if !schema.parameters.is_empty() {
                     prompt.push_str("Parameters:\n");
                     for param in &schema.parameters {
-                        let required = if param.required { "required" } else { "optional" };
                         prompt.push_str(&format!(
                             "- `{}` ({}{}): {}\n",
-                            param.name, param.type_name,
+                            param.name,
+                            param.type_name,
                             if param.required { ", required" } else { ", optional" },
                             param.description
                         ));
@@ -325,29 +342,28 @@ impl Task {
         // Get memories for this device and task
         let memories = db.query(
             "SELECT key, value, memory_type, confidence
-             FROM local_data
-             WHERE device_id = ?1
-               AND task_id IN (
-                   SELECT id FROM tasks WHERE title IN (?2, 'general')
-               )
-             ORDER BY
-               CASE memory_type
-                 WHEN 'fact' THEN 1
-                 WHEN 'context' THEN 2
-                 WHEN 'preference' THEN 3
-               END,
-               confidence DESC,
-               updated_at DESC",
+         FROM local_data
+         WHERE device_id = ?1
+           AND task_id IN (
+               SELECT id FROM tasks WHERE title IN (?2, 'general')
+           )
+         ORDER BY
+           CASE memory_type
+             WHEN 'fact' THEN 1
+             WHEN 'context' THEN 2
+             WHEN 'preference' THEN 3
+           END,
+           confidence DESC,
+           updated_at DESC",
             rusqlite::params![device_id, self.title()]
         )?;
 
         let memories: Vec<serde_json::Value> = serde_json::from_str(&memories)?;
 
         if memories.is_empty() {
-            return Ok(base_instructions.to_string());
+            return Ok(prompt);
         }
 
-        // Separate by type
         let facts: Vec<_> = memories.iter()
             .filter(|m| m["memory_type"].as_str() == Some("fact"))
             .collect();
@@ -360,42 +376,33 @@ impl Task {
             .filter(|m| m["memory_type"].as_str() == Some("context"))
             .collect();
 
-        let mut prompt = base_instructions.to_string();
-
-        // Add facts (high confidence, objective)
         if !facts.is_empty() {
             prompt.push_str("\n\n# System Information\n");
             for fact in facts {
                 let key = fact["key"].as_str().unwrap_or("");
                 let value = fact["value"].as_str().unwrap_or("");
                 let confidence = fact["confidence"].as_f64().unwrap_or(1.0);
-
-                // Only include high-confidence facts
                 if confidence >= 0.8 {
                     prompt.push_str(&format!("- {}: {}\n", key, value));
                 }
             }
         }
 
-        // Add context (what user is currently doing)
         if !context.is_empty() {
             prompt.push_str("\n# Current Context\n");
-            for ctx in context {
+            for ctx in &context {
                 let key = ctx["key"].as_str().unwrap_or("");
                 let value = ctx["value"].as_str().unwrap_or("");
                 prompt.push_str(&format!("- {}: {}\n", key, value));
             }
         }
 
-        // Add preferences (how user likes things)
         if !preferences.is_empty() {
             prompt.push_str("\n# User Preferences\n");
             for pref in preferences {
                 let key = pref["key"].as_str().unwrap_or("");
                 let value = pref["value"].as_str().unwrap_or("");
                 let confidence = pref["confidence"].as_f64().unwrap_or(0.8);
-
-                // Phrase preferences as preferences, not rules
                 if confidence >= 0.7 {
                     prompt.push_str(&format!("- User prefers: {} ({})\n", value, key));
                 } else {
@@ -403,7 +410,7 @@ impl Task {
                 }
             }
             prompt.push_str("\nNote: These are preferences, not strict rules. \
-                            Adapt based on the specific request.\n");
+                        Adapt based on the specific request.\n");
         }
 
         Ok(prompt)
@@ -417,6 +424,7 @@ impl Task {
         device_key: String,
         streaming: bool,
         events: Option<EventSender>,
+        conversation_ctx: Option<(u64, Arc<Mutex<u32>>)>,
     ) -> Result<ResponseMessage> {
         match self.task_type() {
             TaskType::Singular => {
@@ -425,7 +433,7 @@ impl Task {
                 specialist.execute(url, self, messages, streaming, events).await
             }
             TaskType::AgenticLoop => {
-                self.execute_agentic_loop(messages, device_id, device_key, streaming, events).await
+                self.execute_agentic_loop(messages, device_id, device_key, streaming, events, conversation_ctx).await
             }
         }
     }
@@ -439,6 +447,8 @@ impl Task {
         device_key: String,
         streaming: bool,
         events: Option<EventSender>,
+        conversation_id: Option<u64>,
+        message_count: Arc<Mutex<u32>>,
     ) -> Result<ResponseMessage> {
         let system_prompt = self.build_system_prompt(db, device_id)?;
 
@@ -449,10 +459,10 @@ impl Task {
         }];
         messages.extend(user_messages);
 
-        self.execute(messages, device_id, device_key, streaming, events).await
+        let conversation_ctx = conversation_id.map(|id| (id, message_count));
+        self.execute(messages, device_id, device_key, streaming, events, conversation_ctx).await
     }
 
-    /// Agentic loop execution: keeps running until no more tool calls
     async fn execute_agentic_loop(
         &self,
         mut messages: Vec<Message>,
@@ -460,17 +470,31 @@ impl Task {
         device_key: String,
         streaming: bool,
         events: Option<EventSender>,
+        conversation_ctx: Option<(u64, Arc<Mutex<u32>>)>,
     ) -> Result<ResponseMessage> {
         let specialist = self.specialist();
         let url = self.execution_context().url();
+        let conversation = Conversation::new(device_id);
 
         loop {
             let response = specialist.execute(url, self, messages.clone(), streaming, events.clone()).await?;
 
-            // Add assistant response to history
+            // Persist assistant turn (with tool_calls if present)
+            if let Some((conv_id, ref count)) = conversation_ctx {
+                let mut c = count.lock().unwrap();
+                if let Err(e) = conversation.add_message(
+                    Some(conv_id),
+                    "assistant",
+                    response.content.as_deref(),
+                    response.tool_calls.as_ref(),
+                    &mut c,
+                ) {
+                    eprintln!("Warning: failed to persist assistant message: {}", e);
+                }
+            }
+
             messages.push(response.to_message());
 
-            // Check if there are tool calls to process
             if let Some(tool_calls) = &response.tool_calls {
                 for tool_call in tool_calls {
                     let tool_name = &tool_call.function.name;
@@ -478,36 +502,29 @@ impl Task {
 
                     if let Some(ref ev) = events {
                         ev.tool_call(self.title(), tool_name, args.clone());
-                    } else {
-                        println!("[Calling tool: {} with args: {}]", tool_name, args);
                     }
+
                     if tool_name == "switch_task" {
                         let target_task_name = args["task"].as_str()
-                            .ok_or_else(|| anyhow::anyhow!("Missing task name"))?;
+                            .ok_or_else(|| anyhow::anyhow!("Missing task name in switch_task"))?;
 
                         let target_task = Task::from_str(target_task_name)
                             .ok_or_else(|| anyhow::anyhow!("Unknown task: {}", target_task_name))?;
 
                         if let Some(ref ev) = events {
                             ev.task_switch(self.title(), target_task.title());
-                        } else {
-                            println!("\n[Switching from {} to {}]\n", self.title(), target_task.title());
                         }
 
-                        messages.push(Message {
-                            role: "system".to_string(),
-                            content: Some(format!(
-                                "Task switch: {} → {}. Continue with the current objective.",
-                                self.title(),
-                                target_task.title()
-                            )),
-                            tool_calls: None,
-                        });
-
-                        return Box::pin(target_task.execute(messages, device_id, device_key, streaming, events)).await;
+                        return Box::pin(target_task.execute(
+                            messages,
+                            device_id,
+                            device_key,
+                            streaming,
+                            events,
+                            conversation_ctx,
+                        )).await;
                     }
 
-                    // Determine execution strategy based on tool location
                     use artificer_shared::executor::ToolExecutor;
                     use artificer_shared::ToolLocation;
 
@@ -515,20 +532,16 @@ impl Task {
                         Ok(schema) => {
                             let executor = match schema.location {
                                 ToolLocation::Server => ToolExecutor::local(),
-                                ToolLocation::Client => {
-                                    ToolExecutor::remote(
-                                        "http://localhost:8081".to_string(),
-                                        device_id,
-                                        device_key.clone(),
-                                    )
-                                }
+                                ToolLocation::Client => ToolExecutor::remote(
+                                    "http://localhost:8081".to_string(),
+                                    device_id,
+                                    device_key.clone(),
+                                ),
                             };
-
                             executor.execute(tool_name, args).await
                                 .unwrap_or_else(|e| format!("Error: {}", e))
                         }
                         Err(_) => {
-                            // Fallback to local execution if schema not found
                             tool_registry::use_tool(tool_name, args)
                                 .unwrap_or_else(|e| format!("Error: {}", e))
                         }
@@ -536,19 +549,29 @@ impl Task {
 
                     if let Some(ref ev) = events {
                         ev.tool_result(self.title(), tool_name, result.clone());
-                    } else {
-                        println!("[Tool result: {}]", result);
+                    }
+
+                    // Persist tool result
+                    if let Some((conv_id, ref count)) = conversation_ctx {
+                        let mut c = count.lock().unwrap();
+                        if let Err(e) = conversation.add_message(
+                            Some(conv_id),
+                            "tool",
+                            Some(&result),
+                            None,
+                            &mut c,
+                        ) {
+                            eprintln!("Warning: failed to persist tool result: {}", e);
+                        }
                     }
 
                     messages.push(Message {
-                        role: "assistant".to_string(),
+                        role: "tool".to_string(),
                         content: Some(result),
                         tool_calls: None,
                     });
                 }
-                // Continue loop to process tool results
             } else {
-                // No tool calls - we're done
                 return Ok(response);
             }
         }
@@ -559,16 +582,23 @@ impl Task {
         device_id: i64,
         device_key: String,
         events: Option<EventSender>,
+        conversation_id: u64,
+        message_count: Arc<Mutex<u32>>,
+        original_message: String,
     ) -> Result<ResponseMessage> {
+        let mut any_tools_called = false;
         let mut context = String::new();
 
         for step in steps {
             let task = Task::from_str(&step.task)
-                .ok_or_else(|| anyhow::anyhow!("Unknown task in pipeline: {}", step.task))?;
+                .ok_or_else(|| anyhow::anyhow!("Unknown task: {}", step.task))?;
 
             if let Some(ref ev) = events {
                 ev.task_switch("pipeline", task.title());
             }
+
+            // Track if this step type can call tools
+            let step_uses_tools = matches!(task.task_type(), TaskType::AgenticLoop);
 
             let user_content = if context.is_empty() {
                 step.directions.clone()
@@ -582,20 +612,79 @@ impl Task {
                     content: Some(user_content),
                     tool_calls: None,
                 }],
-                db,
-                device_id,
-                device_key.clone(),
-                events.is_some(),
-                events.clone(),
+                db, device_id, device_key.clone(),
+                events.is_some(), events.clone(),
+                Some(conversation_id), message_count.clone(),
             ).await?;
+
+            if step_uses_tools {
+                any_tools_called = true; // conservative: if the task *could* use tools, route through examiner
+            }
 
             context = response.content.clone().unwrap_or_default();
         }
 
-        Ok(ResponseMessage {
-            role: "assistant".to_string(),
-            content: Some(context),
-            tool_calls: None,
-        })
+        // If no agentic steps ran, Chat handled it directly — return as-is
+        if !any_tools_called {
+            return Ok(ResponseMessage {
+                role: "assistant".to_string(),
+                content: Some(context),
+                tool_calls: None,
+            });
+        }
+
+        // Run Examiner
+        let examiner_input = format!(
+            "Original request: {}\n\nInformation gathered:\n{}",
+            original_message, context
+        );
+
+        if let Some(ref ev) = events {
+            ev.task_switch("pipeline", "examiner");
+        }
+
+        let examiner_response = Task::Examiner.execute_with_prompt(
+            vec![Message { role: "user".to_string(), content: Some(examiner_input.clone()), tool_calls: None }],
+            db, device_id, device_key.clone(), false, None,
+            None, Arc::new(Mutex::new(0)),
+        ).await?;
+
+        // Parse examiner tool call
+        let fulfilled = examiner_response.tool_calls
+            .as_ref()
+            .and_then(|tc| tc.first())
+            .and_then(|tc| tc.function.arguments["fulfilled"].as_bool())
+            .unwrap_or(true); // default to fulfilled if parsing fails
+
+        if !fulfilled {
+            // Send back to router once (avoid infinite loops)
+            // For now: log the reason and fall through to summarizer anyway
+            let reason = examiner_response.tool_calls
+                .as_ref()
+                .and_then(|tc| tc.first())
+                .and_then(|tc| tc.function.arguments["reason"].as_str())
+                .unwrap_or("")
+                .to_string();
+            eprintln!("Examiner: not fulfilled — {}", reason);
+            // TODO: retry loop with counter
+        }
+
+        // Run Summarizer
+        if let Some(ref ev) = events {
+            ev.task_switch("examiner", "summarizer");
+        }
+
+        let summarizer_input = format!(
+            "Summarize this into a clear response to the user.\
+         \n\nOriginal request: {}\n\nInformation gathered:\n{}",
+            original_message, context
+        );
+
+        Task::Summarizer.execute_with_prompt(
+            vec![Message { role: "user".to_string(), content: Some(summarizer_input), tool_calls: None }],
+            db, device_id, device_key.clone(),
+            events.is_some(), events.clone(),
+            None, Arc::new(Mutex::new(0)),
+        ).await
     }
 }

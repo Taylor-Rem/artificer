@@ -67,12 +67,12 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             conversation_id INTEGER NOT NULL,
             role TEXT NOT NULL,
-            message TEXT NOT NULL,
+            message TEXT,
+            tool_calls TEXT,
             m_order INTEGER NOT NULL,
             created INTEGER NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE
+                ON DELETE CASCADE ON UPDATE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 
@@ -91,14 +91,11 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             last_accessed INTEGER,
             UNIQUE(device_id, task_id, key),
             FOREIGN KEY (device_id) REFERENCES devices(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
+                ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (task_id) REFERENCES tasks(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
+                ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
+                ON DELETE CASCADE ON UPDATE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_local_data_device ON local_data(device_id);
         CREATE INDEX IF NOT EXISTS idx_local_data_task ON local_data(device_id, task_id);
@@ -120,8 +117,7 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             max_retries INTEGER NOT NULL DEFAULT 3,
             context TEXT,
             FOREIGN KEY (device_id) REFERENCES devices(id)
-                ON DELETE SET NULL
-                ON UPDATE CASCADE
+                ON DELETE SET NULL ON UPDATE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
         CREATE INDEX IF NOT EXISTS idx_jobs_device ON background(device_id);
@@ -142,10 +138,6 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         SELECT m.* FROM messages m
         JOIN conversations c ON m.conversation_id = c.id
         WHERE c.device_id = (SELECT value FROM runtime_context WHERE key = 'current_device_id');
-
-        CREATE VIEW IF NOT EXISTS device_task_history AS
-        SELECT th.* FROM task_history th
-        WHERE th.device_id = (SELECT value FROM runtime_context WHERE key = 'current_device_id');
 
         CREATE VIEW IF NOT EXISTS device_local_data AS
         SELECT ltd.* FROM local_data ltd

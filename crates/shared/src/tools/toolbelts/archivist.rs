@@ -97,24 +97,6 @@ impl Archivist {
         let mut output = String::new();
         output.push_str(&format!("title: {}\n", conv_title));
 
-        // Get tasks
-        let tasks_result = db::get().query(
-            "SELECT DISTINCT t.title
-             FROM device_task_history th
-             JOIN tasks t ON th.task_id = t.id
-             WHERE th.conversation_id = ?1
-             ORDER BY th.created",
-            rusqlite::params![conv_id],
-        )?;
-
-        let tasks: Vec<serde_json::Value> = serde_json::from_str(&tasks_result)?;
-        if !tasks.is_empty() {
-            let task_names: Vec<&str> = tasks.iter()
-                .filter_map(|t| t["title"].as_str())
-                .collect();
-            output.push_str(&format!("tasks_used: {}\n", task_names.join(", ")));
-        }
-
         // Get keywords
         let keywords_result = db::get().query(
             "SELECT k.keyword

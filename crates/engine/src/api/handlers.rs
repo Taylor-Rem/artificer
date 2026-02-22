@@ -6,7 +6,7 @@ use axum::{
 use futures_util::stream::Stream;
 use serde_json::json;
 use axum::extract::State;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::convert::Infallible;
 use artificer_shared::{db::Db, rusqlite};
 use crate::events;
@@ -34,33 +34,23 @@ pub async fn handle_chat(
         let conversation_id = match req.conversation_id {
             Some(id) => id,
             None => {
-                let user_message = Message {
-                    role: "user".to_string(),
-                    content: Some(req.message.clone()),
-                    tool_calls: None,
-                };
-                match Conversation::new(req.device_id).init(&user_message, &Task::Router).await {
-                    Ok((conv_id, _)) => conv_id,
-                    Err(e) => {
-                        events.error(format!("Failed to initialize conversation: {}", e));
-                        return;
-                    }
+                let user_message = Message { role: "user".to_string(), content: Some(req.message.clone()), tool_calls: None };
+                match Conversation::new(req.device_id).init(&user_message).await {
+                    Ok(conv_id) => conv_id,
+                    Err(e) => { events.error(format!("Failed to create conversation: {}", e)); return; }
                 }
             }
         };
 
-        let mut messages = conversation.get_messages(conversation_id).unwrap_or_default();
-        let mut message_count = messages.len() as u32;
+        let messages = conversation.get_messages(conversation_id).unwrap_or_default();
+        let message_count = Arc::new(Mutex::new(messages.len() as u32));
 
-        if let Err(e) = conversation.add_message(Some(conversation_id), "user", &req.message, &mut message_count) {
-            eprintln!("Warning: Failed to save user message: {}", e);
+        {
+            let mut count = message_count.lock().unwrap();
+            if let Err(e) = conversation.add_message(Some(conversation_id), "user", Some(req.message.as_str()), None, &mut count) {
+                eprintln!("Warning: Failed to save user message: {}", e);
+            }
         }
-
-        messages.push(Message {
-            role: "user".to_string(),
-            content: Some(req.message.clone()),
-            tool_calls: None,
-        });
 
         // Run router to get pipeline plan
         let router_response = Task::Router.execute_with_prompt(
@@ -74,6 +64,8 @@ pub async fn handle_chat(
             req.device_key.clone(),
             false,
             None,
+            None,
+            Arc::new(Mutex::new(0u32)),
         ).await;
 
         // Parse pipeline steps from router tool call
@@ -103,10 +95,14 @@ pub async fn handle_chat(
             req.device_id,
             req.device_key.clone(),
             Some(events.clone()),
+            conversation_id,
+            message_count.clone(),
+            req.message.clone(),
         ).await {
             Ok(response) => {
                 if let Some(content) = &response.content {
-                    if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", content, &mut message_count) {
+                    let mut count = message_count.lock().unwrap();
+                    if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", Some(content.as_str()), None, &mut count) {
                         eprintln!("Warning: Failed to save assistant message: {}", e);
                     }
                 }
