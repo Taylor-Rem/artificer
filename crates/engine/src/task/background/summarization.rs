@@ -16,14 +16,9 @@ pub fn execute<'a>(
         let conversation_id = args["conversation_id"].as_i64()
             .ok_or_else(|| anyhow::anyhow!("Missing conversation_id"))?;
 
-        let messages_json = ctx.db.query(
-            "SELECT role, message FROM messages
-             WHERE conversation_id = ?1
-             ORDER BY m_order",
-            rusqlite::params![conversation_id]
-        )?;
+        let messages = ctx.messages.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Summarization requires conversation context"))?;
 
-        let messages: Vec<Value> = serde_json::from_str(&messages_json)?;
         let text: String = messages.iter()
             .map(|m| format!("{}: {}",
                              m["role"].as_str().unwrap_or(""),

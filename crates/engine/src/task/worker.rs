@@ -12,6 +12,7 @@ pub struct JobContext<'a> {
     pub db: &'a Db,
     pub specialist: &'a Specialist,
     pub title_service: &'a Title,
+    pub messages: Option<Vec<Value>>,
 }
 
 pub async fn execute(task: &Task, ctx: &JobContext<'_>, args: &Value) -> anyhow::Result<String> {
@@ -128,11 +129,24 @@ impl Worker {
 
         self.mark_job_running(job.id)?;
 
+        let messages = if job.task.needs_context() {
+            let conversation_id = job.arguments["conversation_id"].as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing conversation_id for context-requiring task {:?}", job.task))?;
+            let json = self.db.query(
+                "SELECT role, message FROM messages WHERE conversation_id = ?1 ORDER BY m_order",
+                rusqlite::params![conversation_id],
+            )?;
+            Some(serde_json::from_str::<Vec<Value>>(&json)?)
+        } else {
+            None
+        };
+
         let specialist = job.task.specialist();
         let ctx = JobContext {
             db: &self.db,
             specialist: &specialist,
             title_service: &self.title_service,
+            messages,
         };
 
         let result = execute(&job.task, &ctx, &job.arguments).await;

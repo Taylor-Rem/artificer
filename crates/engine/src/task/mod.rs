@@ -41,6 +41,7 @@ macro_rules! define_tasks {
                 task_id: $task_id:literal,
                 specialist: $specialist:expr,
                 context: $context:expr,
+                needs_context: $needs_context:literal,
                 task_type: $task_type:expr,
                 instructions: $instructions:literal,
                 switches_to: [$($switch:ident),*],
@@ -101,6 +102,12 @@ macro_rules! define_tasks {
                 }
             }
 
+            pub fn needs_context(&self) -> bool {
+                match self {
+                    $(Task::$variant => $needs_context),*
+                }
+            }
+
             /// Get task execution type
             pub fn task_type(&self) -> TaskType {
                 match self {
@@ -136,6 +143,7 @@ define_tasks! {
         task_id: 1,
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
+        needs_context: false,
         task_type: TaskType::Singular,
         instructions: "Generate a concise, descriptive title (3-5 words) for this conversation. \
             Use underscores instead of spaces. Use only alphanumeric characters and underscores. \
@@ -148,8 +156,24 @@ define_tasks! {
         task_id: 1,
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
+        needs_context: true,
         task_type: TaskType::Singular,
-        instructions: "Summarize the following text concisely in 2-3 sentences. Focus on the main points and key takeaways.",
+        instructions: "You are a conversation archivist. Your job is to write a compact factual summary \
+            of a conversation that will be used by an AI assistant to quickly understand what was discussed \
+            without reading the full transcript.\
+            \n\nWrite 2-4 sentences maximum. Use plain prose, no markdown, no headers, no bullet points.\
+            \n\nFocus on:\
+            \n- Topics discussed (what subjects came up)\
+            \n- Key facts the user shared about themselves (names, places, objects, preferences)\
+            \n- Any decisions made or questions answered\
+            \n\nDo NOT include:\
+            \n- The assistant's responses or advice\
+            \n- Emotional commentary or filler phrases\
+            \n- Any formatting whatsoever\
+            \n\nExample output:\
+            \nThe user asked about dogs and mentioned they used to drive through Guardsman Pass in Midway, \
+            Utah with their dog in a 1998 Subaru Forester. They were interested in facts about the trail \
+            and their old car.",
         switches_to: [],
     },
     Translation {
@@ -158,6 +182,7 @@ define_tasks! {
         task_id: 1,
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
+        needs_context: false,
         task_type: TaskType::Singular,
         instructions: "Translate the following text accurately while preserving tone and meaning. Maintain the original formatting and structure.",
         switches_to: [],
@@ -168,6 +193,7 @@ define_tasks! {
         task_id: 1,
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
+        needs_context: true,
         task_type: TaskType::Singular,
         instructions: "Extract and return only the requested information from the text. Be precise and concise.",
         switches_to: [],
@@ -178,6 +204,7 @@ define_tasks! {
         task_id: 1,
         specialist: Specialist::Quick,
         context: ExecutionContext::Background,
+        needs_context: true,
         task_type: TaskType::Singular,
         instructions: "Review this conversation and extract key factual information that would be \
             useful to remember for future sessions. Focus on:\n\
@@ -197,6 +224,7 @@ define_tasks! {
         task_id: 5,
         specialist: Specialist::Reasoner,
         context: ExecutionContext::Interactive,
+        needs_context: true,
         task_type: TaskType::Singular,
         instructions: "You are a request router for Artificer, a local AI assistant. \
             Your only job is to analyze the user's message and decide how to handle it.\
@@ -218,6 +246,7 @@ define_tasks! {
         task_id: 9,
         specialist: Specialist::Reasoner,
         context: ExecutionContext::Interactive,
+        needs_context: true,
         task_type: TaskType::Singular,
         instructions: "You are a quality examiner. You receive a user request and the results \
             of a pipeline that attempted to fulfill it.\
@@ -234,6 +263,7 @@ define_tasks! {
         task_id: 2,
         specialist: Specialist::ToolCaller,
         context: ExecutionContext::Interactive,
+        needs_context: true,
         task_type: TaskType::AgenticLoop,
         instructions: "You are Artificer, a local AI assistant. You handle casual conversation \
             and simple factual questions.\
@@ -253,6 +283,7 @@ define_tasks! {
         task_id: 6,
         specialist: Specialist::ToolCaller,
         context: ExecutionContext::Interactive,
+        needs_context: false,
         task_type: TaskType::AgenticLoop,
         instructions: "You are a web research specialist. You have access to Brave Search tools.\
             \n\nBEHAVIOR:\
@@ -271,6 +302,7 @@ define_tasks! {
     task_id: 8,
     specialist: Specialist::ToolCaller,
     context: ExecutionContext::Interactive,
+    needs_context: false,
     task_type: TaskType::AgenticLoop,
     instructions: "You are a file system specialist. You have access to FileSmith tools \
         that execute on the user's local device.\
@@ -287,6 +319,7 @@ define_tasks! {
         task_id: 7,
         specialist: Specialist::Reasoner,
         context: ExecutionContext::Interactive,
+        needs_context: false,
         task_type: TaskType::Singular,
         instructions: "You are a summarization specialist. You receive content from previous pipeline \
             steps and synthesize it into a clear, well-organized response.\
@@ -584,10 +617,16 @@ impl Task {
         events: Option<EventSender>,
         conversation_id: u64,
         message_count: Arc<Mutex<u32>>,
-        original_message: String,
+        messages: Vec<Message>,
     ) -> Result<ResponseMessage> {
-        let mut any_tools_called = false;
         let mut context = String::new();
+        let mut last_task: Option<Task> = None;
+
+        let original_message = messages.iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
 
         for step in steps {
             let task = Task::from_str(&step.task)
@@ -597,35 +636,43 @@ impl Task {
                 ev.task_switch("pipeline", task.title());
             }
 
-            // Track if this step type can call tools
-            let step_uses_tools = matches!(task.task_type(), TaskType::AgenticLoop);
-
-            let user_content = if context.is_empty() {
-                step.directions.clone()
+            let user_messages = if task.needs_context() {
+                if context.is_empty() {
+                    messages.clone()
+                } else {
+                    let mut msgs = messages.clone();
+                    msgs.push(Message {
+                        role: "user".to_string(),
+                        content: Some(format!("# Context from previous step:\n{}", context)),
+                        tool_calls: None,
+                    });
+                    msgs
+                }
             } else {
-                format!("{}\n\n# Context from previous step:\n{}", step.directions, context)
-            };
-
-            let response = task.execute_with_prompt(
+                let user_content = if context.is_empty() {
+                    step.directions.clone()
+                } else {
+                    format!("{}\n\n# Context from previous step:\n{}", step.directions, context)
+                };
                 vec![Message {
                     role: "user".to_string(),
                     content: Some(user_content),
                     tool_calls: None,
-                }],
+                }]
+            };
+
+            let response = task.execute_with_prompt(
+                user_messages,
                 db, device_id, device_key.clone(),
                 events.is_some(), events.clone(),
                 Some(conversation_id), message_count.clone(),
             ).await?;
 
-            if step_uses_tools {
-                any_tools_called = true; // conservative: if the task *could* use tools, route through examiner
-            }
-
             context = response.content.clone().unwrap_or_default();
+            last_task = Some(task);
         }
 
-        // If no agentic steps ran, Chat handled it directly — return as-is
-        if !any_tools_called {
+        if matches!(last_task, Some(Task::Chat)) {
             return Ok(ResponseMessage {
                 role: "assistant".to_string(),
                 content: Some(context),
