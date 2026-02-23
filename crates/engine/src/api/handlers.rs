@@ -88,6 +88,14 @@ pub async fn handle_chat(
             }
         };
 
+        // Build full message history (history + current user message)
+        let mut full_messages = messages.clone();
+        full_messages.push(Message {
+            role: "user".to_string(),
+            content: Some(req.message.clone()),
+            tool_calls: None,
+        });
+
         // Execute the pipeline
         match Task::execute_pipeline(
             steps,
@@ -97,7 +105,7 @@ pub async fn handle_chat(
             Some(events.clone()),
             conversation_id,
             message_count.clone(),
-            req.message.clone(),
+            full_messages,
         ).await {
             Ok(response) => {
                 if let Some(content) = &response.content {
