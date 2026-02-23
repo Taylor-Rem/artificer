@@ -158,7 +158,22 @@ define_tasks! {
         context: ExecutionContext::Background,
         needs_context: true,
         task_type: TaskType::Singular,
-        instructions: "Summarize the following text concisely in 2-3 sentences. Focus on the main points and key takeaways.",
+        instructions: "You are a conversation archivist. Your job is to write a compact factual summary \
+            of a conversation that will be used by an AI assistant to quickly understand what was discussed \
+            without reading the full transcript.\
+            \n\nWrite 2-4 sentences maximum. Use plain prose, no markdown, no headers, no bullet points.\
+            \n\nFocus on:\
+            \n- Topics discussed (what subjects came up)\
+            \n- Key facts the user shared about themselves (names, places, objects, preferences)\
+            \n- Any decisions made or questions answered\
+            \n\nDo NOT include:\
+            \n- The assistant's responses or advice\
+            \n- Emotional commentary or filler phrases\
+            \n- Any formatting whatsoever\
+            \n\nExample output:\
+            \nThe user asked about dogs and mentioned they used to drive through Guardsman Pass in Midway, \
+            Utah with their dog in a 1998 Subaru Forester. They were interested in facts about the trail \
+            and their old car.",
         switches_to: [],
     },
     Translation {
