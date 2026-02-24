@@ -1,63 +1,64 @@
+pub mod title_generation;
+pub mod summarization;
+pub(crate) mod memory_extraction;
+
+use std::sync::Arc;
 use anyhow::Result;
+use reqwest::Client;
 use tokio::time::{sleep, Duration};
 use tokio::sync::watch;
 use serde_json::Value;
 use artificer_shared::{db::Db, rusqlite};
-use crate::services::title::Title;
-use crate::task::background::{summarization, title_generation, memory_extraction};
-use crate::task::specialist::Specialist;
-use crate::task::Task;
 
-pub struct JobContext<'a> {
-    pub db: &'a Db,
-    pub specialist: &'a Specialist,
-    pub title_service: &'a Title,
-    pub messages: Option<Vec<Value>>,
-}
-
-pub async fn execute(task: &Task, ctx: &JobContext<'_>, args: &Value) -> anyhow::Result<String> {
-    match task {
-        Task::TitleGeneration => title_generation::execute(ctx, args).await,
-        Task::Summarization => summarization::execute(ctx, args).await,
-        Task::MemoryExtraction => memory_extraction::execute(ctx, args).await,
-        _ => Err(anyhow::anyhow!("Task not implemented: {:?}", task)),
-    }
-}
+use crate::pool::GpuPool;
 
 #[derive(Debug)]
 struct PendingJob {
     id: i64,
-    task: super::Task,
+    #[allow(dead_code)]
+    device_id: Option<i64>,
+    method: String,
     arguments: Value,
 }
 
 impl PendingJob {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         let id = row.get(0)?;
-        let method_str: String = row.get(1)?;
-        let arguments_str: String = row.get(2)?;
+        let device_id = row.get(1)?;
+        let method_str: String = row.get(2)?;
+        let arguments_str: String = row.get(3)?;
 
-        let task = super::Task::from_str(&method_str)
-            .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
         let arguments = serde_json::from_str(&arguments_str)
             .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
-        Ok(PendingJob { id, task, arguments })
+        Ok(PendingJob { id, device_id, method: method_str, arguments })
     }
 }
 
+fn needs_context(method: &str) -> bool {
+    matches!(method, "summarization" | "memory_extraction"
+        | "task_summarization" | "task_memory_extraction")
+}
+
 pub struct Worker {
-    db: Db,
-    title_service: Title,
+    db: Arc<Db>,
+    pool: Arc<GpuPool>,
+    client: Client,
     poll_interval: Duration,
     shutdown_rx: watch::Receiver<bool>,
 }
 
 impl Worker {
-    pub fn new(poll_interval_secs: u64, shutdown_rx: watch::Receiver<bool>) -> Self {
+    pub fn new(
+        db: Arc<Db>,
+        pool: Arc<GpuPool>,
+        poll_interval_secs: u64,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
         Self {
-            db: Db::default(),
-            title_service: Title::default(),
+            db,
+            pool,
+            client: Client::new(),
             poll_interval: Duration::from_secs(poll_interval_secs),
             shutdown_rx,
         }
@@ -65,7 +66,6 @@ impl Worker {
 
     pub async fn run(&self) -> Result<()> {
         loop {
-            // Check for shutdown signal
             if *self.shutdown_rx.borrow() {
                 println!("Worker shutting down gracefully...");
                 break;
@@ -95,7 +95,6 @@ impl Worker {
                 eprintln!("Error during drain: {}", e);
             }
 
-            // Small delay to avoid tight loop
             sleep(Duration::from_millis(100)).await;
         }
 
@@ -115,7 +114,7 @@ impl Worker {
 
     async fn process_next_job(&self) -> Result<()> {
         let job = self.db.query_row_optional(
-            "SELECT id, method, arguments FROM background
+            "SELECT id, device_id, method, arguments FROM background
              WHERE status = 'pending'
              ORDER BY priority DESC, created_at ASC
              LIMIT 1",
@@ -127,11 +126,21 @@ impl Worker {
             return Ok(());
         };
 
+        // Acquire a background GPU — skip if none available
+        let gpu = match self.pool.acquire_background() {
+            Some(gpu) => gpu,
+            None => return Ok(()), // try again next poll
+        };
+        let gpu_id = gpu.id.clone();
+
         self.mark_job_running(job.id)?;
 
-        let messages = if job.task.needs_context() {
+        let messages = if needs_context(&job.method) {
             let conversation_id = job.arguments["conversation_id"].as_i64()
-                .ok_or_else(|| anyhow::anyhow!("Missing conversation_id for context-requiring task {:?}", job.task))?;
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Missing conversation_id for context-requiring job '{}'",
+                    job.method
+                ))?;
             let json = self.db.query(
                 "SELECT role, message FROM messages WHERE conversation_id = ?1 ORDER BY m_order",
                 rusqlite::params![conversation_id],
@@ -141,30 +150,41 @@ impl Worker {
             None
         };
 
-        let specialist = job.task.specialist();
-        let ctx = JobContext {
-            db: &self.db,
-            specialist: &specialist,
-            title_service: &self.title_service,
-            messages,
+        let result = match job.method.as_str() {
+            "title_generation" => {
+                title_generation::execute(
+                    &self.db, &gpu, &self.client, &job.arguments,
+                ).await
+            }
+            "summarization" => {
+                summarization::execute(
+                    &self.db, &gpu, &self.client, &job.arguments, messages.as_deref(),
+                ).await
+            }
+            "memory_extraction" => {
+                memory_extraction::execute(
+                    &self.db, &gpu, &self.client, &job.arguments, messages.as_deref(),
+                ).await
+            }
+            other => Err(anyhow::anyhow!("Unknown job method: {}", other)),
         };
 
-        let result = execute(&job.task, &ctx, &job.arguments).await;
+        // Always release the GPU
+        self.pool.release(&gpu_id);
 
         match result {
             Ok(res) => self.mark_job_complete(job.id, &res)?,
             Err(e) => {
                 let exhausted = self.mark_job_failed(job.id, &e.to_string())?;
-                if exhausted && matches!(job.task, super::Task::TitleGeneration) {
-                    // Use conversation_id instead of th_id
-                    if let Some(conversation_id) = job.arguments["conversation_id"].as_i64() {
-                        let hash = &uuid::Uuid::new_v4().to_string()[..8];
-                        let fallback_title = format!("conv_{}", hash);
-                        self.db.execute(
-                            "UPDATE conversations SET title = ?1 WHERE id = ?2",
-                            rusqlite::params![fallback_title, conversation_id]
-                        )?;
-                    }
+                if exhausted && job.method == "title_generation"
+                    && let Some(conversation_id) = job.arguments["conversation_id"].as_i64()
+                {
+                    let hash = &uuid::Uuid::new_v4().to_string()[..8];
+                    let fallback_title = format!("conv_{}", hash);
+                    self.db.execute(
+                        "UPDATE conversations SET title = ?1 WHERE id = ?2",
+                        rusqlite::params![fallback_title, conversation_id]
+                    )?;
                 }
             }
         }

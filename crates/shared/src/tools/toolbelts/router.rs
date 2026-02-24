@@ -16,7 +16,7 @@ register_toolbelt! {
             "plan_tasks" => plan_tasks {
                 description: "Plan a pipeline of tasks to fulfill the user's request",
                 params: [
-                    "steps": "array" => "Ordered list of steps, each with 'task' (task name) and 'directions' (specific instructions for that task)"
+                    "steps": "array" => "Ordered list of steps, each with 'specialist' (specialist name) and 'directions' (specific instructions for that specialist)"
                 ]
             }
         }
