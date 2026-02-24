@@ -33,32 +33,32 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_conversations_device ON conversations(device_id);
         CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(device_id, title);
 
+        -- Specialists registry
+        CREATE TABLE IF NOT EXISTS specialists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,  -- 'orchestrator', 'web_research', 'file_smith', etc.
+            gpu_role TEXT NOT NULL CHECK(gpu_role IN ('interactive', 'background')),
+            description TEXT,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_specialists_name ON specialists(name);
+
         -- Tasks (device-specific)
-        -- One row per user request the Orchestrator works on.
-        -- Created when the Orchestrator starts work, updated at checkpoints, finalized on completion.
         CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
+            specialist_id INTEGER NOT NULL,  -- NEW: which specialist handled this
+            primary_task_id INTEGER,  -- NEW: NULL = primary task, non-NULL = sub-task
 
-            -- The original user request, verbatim
             goal TEXT NOT NULL,
-
-            -- Generated after completion via background job
             title TEXT,
             summary TEXT,
-
-            -- The plan the Orchestrator created (JSON array of steps)
             plan TEXT,
-
-            -- Serialized working memory at last checkpoint (JSON)
             working_memory TEXT,
-
-            -- Completion state
             status TEXT NOT NULL DEFAULT 'in_progress'
                 CHECK(status IN ('in_progress', 'completed', 'failed', 'abandoned')),
 
-            -- Timestamps
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             completed_at INTEGER,
@@ -66,11 +66,17 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             FOREIGN KEY (device_id) REFERENCES devices(id)
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-                ON DELETE CASCADE ON UPDATE CASCADE
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (specialist_id) REFERENCES specialists(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            FOREIGN KEY (primary_task_id) REFERENCES tasks(id)
+                ON DELETE CASCADE ON UPDATE CASCADE  -- If primary deleted, sub-tasks go too
         );
         CREATE INDEX IF NOT EXISTS idx_tasks_device ON tasks(device_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON tasks(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_specialist ON tasks(specialist_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_primary ON tasks(primary_task_id);
 
         -- Keywords (global - shared across conversations and tasks)
         CREATE TABLE IF NOT EXISTS keywords (
@@ -130,6 +136,7 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS local_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER NOT NULL,
+            specialist_id INTEGER,  -- NEW: NULL = orchestrator/general, non-NULL = specialist-specific
             task_id INTEGER,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
@@ -138,8 +145,10 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             last_accessed INTEGER,
-            UNIQUE(device_id, key),
+            UNIQUE(device_id, specialist_id, key),  -- UPDATED: unique per device+specialist
             FOREIGN KEY (device_id) REFERENCES devices(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (specialist_id) REFERENCES specialists(id)
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (task_id) REFERENCES tasks(id)
                 ON DELETE SET NULL ON UPDATE CASCADE
@@ -147,6 +156,7 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_local_data_device ON local_data(device_id);
         CREATE INDEX IF NOT EXISTS idx_local_data_device_key ON local_data(key);
         CREATE INDEX IF NOT EXISTS idx_local_data_type ON local_data(memory_type);
+        CREATE INDEX IF NOT EXISTS idx_local_data_specialist ON local_data(specialist_id);
 
         -- Background jobs
         CREATE TABLE IF NOT EXISTS background (
@@ -267,6 +277,74 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         )
         GROUP BY t.id, t.conversation_id, t.goal, t.title, t.summary,
                  t.status, t.plan, t.created_at, t.completed_at;
+
+        -- View for specialist-specific memory
+        CREATE VIEW IF NOT EXISTS device_specialist_memory AS
+        SELECT ltd.* FROM local_data ltd
+        WHERE ltd.device_id = (
+            SELECT CAST(value AS INTEGER)
+            FROM runtime_context WHERE key = 'current_device_id'
+        )
+        AND ltd.specialist_id IS NOT NULL;  -- Only specialist-specific memories
+
+        -- View for primary tasks only
+        CREATE VIEW IF NOT EXISTS device_primary_tasks AS
+        SELECT t.* FROM tasks t
+        WHERE t.device_id = (
+            SELECT CAST(value AS INTEGER)
+            FROM runtime_context WHERE key = 'current_device_id'
+        )
+        AND t.primary_task_id IS NULL;
+
+        -- View for sub-tasks with their parent info
+        CREATE VIEW IF NOT EXISTS device_sub_tasks AS
+        SELECT
+            sub.*,
+            parent.goal as parent_goal,
+            parent.status as parent_status
+        FROM tasks sub
+        JOIN tasks parent ON sub.primary_task_id = parent.id
+        WHERE sub.device_id = (
+            SELECT CAST(value AS INTEGER)
+            FROM runtime_context WHERE key = 'current_device_id'
+        );
     ")?;
+    Ok(())
+}
+
+pub fn populate_tables(conn: &Connection) -> Result<()> {
+    // Orchestrator
+    conn.execute(
+        "INSERT OR IGNORE INTO specialists (name, gpu_role, description, created_at)
+         VALUES ('orchestrator', 'interactive', 'Primary orchestrator', unixepoch())",
+        [],
+    )?;
+
+    // Interactive specialists
+    for spec in crate::agent::implementations::SPECIALISTS {
+        conn.execute(
+            "INSERT OR IGNORE INTO specialists (name, gpu_role, description, created_at)
+             VALUES (?1, ?2, ?3, unixepoch())",
+            rusqlite::params![
+                spec.name,
+                match spec.gpu_role {
+                    GpuRole::Interactive => "interactive",
+                    GpuRole::Background => "background",
+                },
+                format!("{} specialist", spec.name),
+            ],
+        )?;
+    }
+
+    // Background agents
+    let background_agents = ["title_generation", "summarization", "memory_extraction"];
+    for name in background_agents {
+        conn.execute(
+            "INSERT OR IGNORE INTO specialists (name, gpu_role, description, created_at)
+             VALUES (?1, 'background', ?2, unixepoch())",
+            rusqlite::params![name, format!("{} background agent", name)],
+        )?;
+    }
+
     Ok(())
 }

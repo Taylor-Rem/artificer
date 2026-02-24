@@ -1,11 +1,10 @@
 use anyhow::Result;
 use serde_json::Value;
+use crate::tools::{get_tool_schema, use_tool};
+use crate::ToolLocation;
 
-/// Determines how a tool should be executed at runtime
 pub enum ToolExecutor {
-    /// Execute tool directly in the current process
     Local,
-    /// Execute tool via HTTP request to a remote envoy client
     Remote {
         base_url: String,
         device_id: i64,
@@ -14,26 +13,37 @@ pub enum ToolExecutor {
 }
 
 impl ToolExecutor {
-    /// Create a local executor (runs tools in current process)
     pub fn local() -> Self {
         Self::Local
     }
 
-    /// Create a remote executor (sends tool calls to envoy via HTTP)
-    pub fn remote(base_url: String, device_id: i64, device_key: String,) -> Self {
-        Self::Remote { base_url, device_id, device_key}
+    pub fn remote(base_url: String, device_id: i64, device_key: String) -> Self {
+        Self::Remote { base_url, device_id, device_key }
     }
 
-    /// Execute a tool with the configured strategy
     pub async fn execute(&self, tool_name: &str, args: &Value) -> Result<String> {
-        match self {
-            ToolExecutor::Local => {
-                // Direct local execution
-                crate::tools::use_tool(tool_name, args)
+        // Look up the tool's location
+        let schema = get_tool_schema(tool_name)?;
+
+        match schema.location {
+            ToolLocation::Server => {
+                // Always execute server-side tools locally
+                use_tool(tool_name, args)
             }
-            ToolExecutor::Remote { base_url, device_id, device_key } => {
-                // Remote execution via HTTP
-                self.execute_remote(base_url, *device_id, device_key, tool_name, args).await
+            ToolLocation::Client => {
+                // Client-side tools need remote execution if we have a remote endpoint
+                match self {
+                    Self::Local => {
+                        // Can't execute client-side tools locally
+                        Err(anyhow::anyhow!(
+                            "Tool '{}' requires client-side execution but no remote endpoint configured",
+                            tool_name
+                        ))
+                    }
+                    Self::Remote { base_url, device_id, device_key } => {
+                        self.execute_remote(base_url, *device_id, device_key, tool_name, args).await
+                    }
+                }
             }
         }
     }

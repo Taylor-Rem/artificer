@@ -13,8 +13,7 @@ static TOOL_REGISTRY: Lazy<HashMap<&'static str, ToolHandler>> = Lazy::new(|| {
     for (name, handler) in toolbelts::file_smith::TOOL_ENTRIES { map.insert(*name, *handler); }
     for (name, handler) in toolbelts::archivist::TOOL_ENTRIES { map.insert(*name, *handler); }
     for (name, handler) in toolbelts::web_search::TOOL_ENTRIES { map.insert(*name, *handler); }
-    for (name, handler) in toolbelts::router::TOOL_ENTRIES { map.insert(*name, *handler); }
-    for (name, handler) in toolbelts::examiner::TOOL_ENTRIES { map.insert(*name, *handler); }
+    for (name, handler) in toolbelts::memory::TOOL_ENTRIES { map.insert(*name, *handler); }
     map
 });
 
@@ -23,8 +22,7 @@ static TOOL_SCHEMAS: Lazy<Vec<ToolSchema>> = Lazy::new(|| {
     schemas.extend(toolbelts::file_smith::TOOL_SCHEMAS.iter().cloned());
     schemas.extend(toolbelts::archivist::TOOL_SCHEMAS.iter().cloned());
     schemas.extend(toolbelts::web_search::TOOL_SCHEMAS.iter().cloned());
-    schemas.extend(toolbelts::router::TOOL_SCHEMAS.iter().cloned());
-    schemas.extend(toolbelts::examiner::TOOL_SCHEMAS.iter().cloned());
+    schemas.extend(toolbelts::memory::TOOL_SCHEMAS.iter().cloned());
     schemas
 });
 

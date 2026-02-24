@@ -3,3 +3,4 @@
 /.idea
 memory.db
 .env
+.DS_STORE

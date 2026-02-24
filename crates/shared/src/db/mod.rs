@@ -35,6 +35,7 @@ impl Default for Db {
         ").expect("Failed to set pragmas");
 
         schema::create_tables(&conn).expect("Failed to create tables");
+        schema::populate_tables(&conn).expect("Failed to populate tables");
 
         Self {
             conn: Arc::new(Mutex::new(conn)),
