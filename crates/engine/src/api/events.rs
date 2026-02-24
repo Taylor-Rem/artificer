@@ -29,9 +29,13 @@ impl EventSender {
     }
 
     fn send(&self, event_type: &str, data: Value) {
+        let mut payload = data;
+        if let Value::Object(ref mut map) = payload {
+            map.insert("type".to_string(), Value::String(event_type.to_string()));
+        }
         let _ = self.tx.try_send(SseEvent {
             event_type: event_type.to_string(),
-            data: data.to_string(),
+            data: payload.to_string(),
         });
     }
 
@@ -77,8 +81,9 @@ impl EventSender {
             "message": message,
         }));
     }
-
-    pub fn done(&self) {
-        self.send("done", serde_json::json!({}));
+    pub fn done(&self, conversation_id: u64) {
+        self.send("done", serde_json::json!({
+            "conversation_id": conversation_id,
+        }));
     }
 }
