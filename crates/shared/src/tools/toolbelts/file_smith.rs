@@ -348,4 +348,13 @@ impl FileSmith {
             Err(e) => Ok(format!("Error searching files: {}", e)),
         }
     }
+    pub fn load(db: &Db) -> Result<Self> {
+        let db_id: i64 = db.query_row_optional(
+            "SELECT id FROM specialists WHERE name = ?1",
+            rusqlite::params![Self::DEFINITION.name],
+            |row| row.get(0),
+        )?.ok_or_else(|| anyhow::anyhow!("Specialist '{}' not found in database", Self::DEFINITION.name))?;
+
+        Ok(Self::new(db_id))
+    }
 }
