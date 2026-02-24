@@ -1,147 +1,166 @@
 # Artificer
 
-A self-hosted, persistent AI infrastructure system built in Rust. Artificer runs locally on your hardware, routes requests through specialized task pipelines, and builds memory of your preferences and context over time.
+A self-hosted AI infrastructure system built in Rust. Artificer runs on your own hardware and provides a persistent, autonomous agent capable of completing long-running tasks — not just answering questions.
 
-## What it is
+## What It Is
 
-Most AI tooling assumes a centralized cloud service. Artificer is the opposite — a local agent system designed to run on your own GPUs, store everything in a local database, and get smarter about how you work the longer you use it.
+Most AI interfaces are chatbots. You ask something, they respond, the interaction ends. Artificer is built around a different model: you give it a goal, and it works until the goal is achieved. It plans, delegates to specialists, evaluates its own progress, and keeps going until the work is actually done.
 
-It is not a wrapper around an API. It is infrastructure.
+It runs entirely on your hardware. No data leaves your machine. Accessible from anywhere via Tailscale.
 
 ## Architecture
 
-Artificer is a Cargo workspace with three crates:
+Artificer is a distributed system with two components:
 
-- **engine** — the server. Handles API requests, task execution, background jobs, and the database.
-- **envoy** — the client. A terminal interface that connects to the engine, handles streaming responses, and exposes client-side tools like file operations.
-- **shared** — common types, the database layer, tool implementations, and the event system.
+**Engine** — The server. Runs on your primary machine alongside your GPUs. Hosts the Orchestrator, manages GPU assignment, maintains the database, and runs background jobs.
 
-### Task Pipeline
+**Envoy** — A lightweight client. Runs on any machine. Sends requests to the engine over HTTP and handles client-side tool execution (file operations run where the files are).
 
-Every user message flows through a router that decomposes it into a pipeline of specialized tasks:
-```
-User message → Router → [task_1, task_2, ...] → execute in sequence → streamed response
-```
+### The Orchestrator
 
-Current tasks:
-- **Router** — analyzes requests and builds task pipelines
-- **Chat** — conversational responses and memory recall
-- **WebResearcher** — web search and article fetching via Brave Search API
-- **Summarizer** — synthesizes content from previous pipeline steps
-- **TitleGeneration** — background job, generates conversation titles
-- **Summarization** — background job, summarizes completed conversations
-- **MemoryExtraction** — background job, extracts facts and preferences from conversations
+The core of the engine. When a request comes in, the Orchestrator:
+
+1. Creates a task record and defines success criteria
+2. Sets a plan using its working memory tools
+3. Delegates work to specialists
+4. Evaluates results against the original goal
+5. Continues until the goal is genuinely complete
+
+The Orchestrator holds the goal and reasons about progress. It does not do the work itself — it directs specialists and synthesizes their output. This keeps its context clean across long tasks and allows it to work through complex multi-step problems without losing the thread.
 
 ### Specialists
 
-Tasks are assigned to specialists which determine the model and GPU used:
+Specialists are focused agents with their own reasoning loops. The Orchestrator delegates to them with specific instructions and gets back synthesized conclusions — not raw tool output.
 
-| Specialist | Model | GPU |
-|------------|-------|-----|
-| Quick | qwen2.5:3b-instruct-q4_K_M | 3070 (port 11434) |
-| ToolCaller | qwen2.5:32b-instruct-q4_K_M | P40 (port 11435) |
+**Interactive specialists** run on the primary GPU alongside the Orchestrator:
+- `web_research` — Searches the web, fetches pages, synthesizes findings
+- `file_smith` — Reads, writes, and manipulates files on the Envoy client
 
-Background jobs run on the 3070. Interactive tasks run on the P40.
+**Background specialists** run on a secondary GPU while the primary stays available:
+- `title_generation` — Generates conversation and task titles
+- `summarization` — Summarizes completed conversations and tasks
+- `memory_extraction` — Extracts long-term facts, preferences, and context
 
-### Memory System
+### GPU Pool
 
-After each conversation, background jobs extract facts, preferences, and context into a typed memory store. This gets injected into system prompts so the AI knows your environment and preferences over time without you repeating yourself.
+Hardware is declared in `hardware.json` at the workspace root. The engine reads this at startup and manages GPU assignment at runtime.
 
-Memory is typed:
-- **fact** — objective, high-confidence information (OS, paths, project names)
-- **preference** — how you like things done
-- **context** — what you're currently working on
-
-### Tool System
-
-Tools are implemented as toolbelts using a declarative macro:
-```rust
-register_toolbelt! {
-    WebSearch {
-        description: "...",
-        location: ToolLocation::Server,
-        tools: {
-            "search" => search {
-                description: "...",
-                params: ["query": "string" => "Search query"]
-            }
-        }
+```json
+{
+  "gpus": [
+    {
+      "id": "p40_primary",
+      "url": "http://localhost:11435",
+      "model": "qwen2.5:32b-instruct-q4_K_M",
+      "role": "interactive"
+    },
+    {
+      "id": "rtx3070_background",
+      "url": "http://localhost:11434",
+      "model": "qwen3:8b",
+      "role": "background"
     }
+  ]
 }
 ```
 
-Tool location determines execution:
-- `ToolLocation::Server` — runs in the engine process
-- `ToolLocation::Client` — forwarded via HTTP to the envoy client, so file operations run on the machine you're chatting from
+Interactive GPUs are assigned to Orchestrator tasks. Background GPUs handle summarization, title generation, and memory extraction. Adding a second interactive GPU automatically enables two concurrent Orchestrator tasks — no code changes required.
 
-Current toolbelts: **FileSmith**, **Archivist**, **WebSearch**, **Router**
+### Database
 
-### Authentication
+SQLite with WAL mode. All state is local.
 
-Devices register with the engine and receive a secret key. Every request is authenticated. The envoy client self-heals — if credentials are rejected it re-registers automatically.
+- **conversations** — Containers for message history
+- **tasks** — One per user request. Tracks goal, plan, working memory, and status
+- **messages** — Full message history linked to both conversation and task
+- **local_data** — Long-term memory: facts, preferences, and context per device
+- **background** — Job queue for post-completion processing
+- **keywords** — Extracted from tasks for searchability
 
-### Event Streaming
+### Working Memory
 
-All responses stream via Server-Sent Events. The engine broadcasts task switches, tool calls, tool results, and content chunks in real time so the client can render progress as it happens.
+The Orchestrator maintains task state across its entire execution:
 
-## Setup
+- `set_plan` / `set_current_step` — Track where it is in the work
+- `set_state` / `get_state` — Key-value store for counters, targets, accumulated results
+- `checkpoint` — Persist progress and prune context for long tasks
+- `mark_complete` — Explicit completion signal before the final response
 
-### Requirements
+Working memory is persisted to the database on every mutation. Context pruning rebuilds the prompt from task state rather than replaying history, so the Orchestrator can work through arbitrarily long tasks without degrading.
 
-- Rust (latest stable)
-- [Ollama](https://ollama.ai) with two instances running on separate GPUs
-- [Brave Search API key](https://api.search.brave.com)
+## Project Structure
 
-### Ollama Setup
-
-Run two Ollama instances targeting different GPUs:
-```bash
-# GPU 0 (3070) — background tasks
-CUDA_VISIBLE_DEVICES=0 OLLAMA_HOST=0.0.0.0:11434 ollama serve
-
-# GPU 1 (P40) — interactive tasks  
-CUDA_VISIBLE_DEVICES=1 OLLAMA_HOST=0.0.0.0:11435 ollama serve
+```
+artificer/
+├── hardware.json          # GPU configuration
+├── crates/
+│   ├── engine/            # Server
+│   │   └── src/
+│   │       ├── api/       # HTTP handlers, SSE streaming, middleware
+│   │       ├── orchestrator/  # Main loop, task state, tools, system prompt
+│   │       ├── specialist/    # Registry and execution for all specialists
+│   │       ├── background/    # Background job workers
+│   │       └── pool.rs        # GPU pool and acquisition
+│   ├── envoy/             # Client
+│   │   └── src/
+│   │       ├── client.rs  # HTTP communication with engine
+│   │       ├── tools.rs   # Client-side tool execution (file operations)
+│   │       └── ui.rs      # Terminal interface
+│   └── shared/            # Types shared between engine and envoy
+│       └── src/
+│           ├── db/        # Database layer (all persistence logic)
+│           └── tools/     # Tool definitions and toolbelts
 ```
 
-Pull the required models on each instance:
-```bash
-ollama pull qwen2.5:3b-instruct-q4_K_M
-ollama pull qwen2.5:32b-instruct-q4_K_M
-```
+## Hardware
 
-### Configuration
+Developed and tested on:
+- **NVIDIA Tesla P40** (24GB VRAM) — Primary/interactive GPU, running `qwen2.5:32b-instruct-q4_K_M` via Ollama on port 11435
+- **NVIDIA RTX 3070** (8GB VRAM) — Background GPU, running `qwen3:8b` via Ollama on port 11434
 
-Create a `.env` file in the workspace root:
-```
-BRAVE_API_KEY=your_key_here
-```
+The P40 keeps models loaded for interactive response times. The 3070 unloads immediately after background tasks to minimize idle power draw.
 
-### Running
+Artificer is designed to scale horizontally with hardware. Adding a second P40 to `hardware.json` enables two concurrent Orchestrator sessions automatically.
+
+## Prerequisites
+
+- Rust (stable)
+- Ollama with models pulled for each GPU
+- Tailscale (for remote access)
+- NVIDIA drivers and CUDA (for GPU power management)
+
+## Running
+
 ```bash
 # Start the engine
-just dev-engine
+cd crates/engine
+cargo run
 
-# Start the envoy client (separate terminal)
-just dev-envoy
+# Start an envoy client (on any machine with access)
+cd crates/envoy
+cargo run
 ```
 
-Or without hot reload:
+For development with hot reloading:
+
 ```bash
-cargo run --bin artificer
-cargo run --bin envoy
+cargo watch -x run
 ```
 
-## Development
-```bash
-just build    # build everything
-just test     # run tests
-just clean    # clean and rebuild
-```
+## Configuration
 
-The justfile has hot-reload commands for both crates that watch for changes and rebuild automatically.
+The engine reads `hardware.json` from the workspace root. The envoy reads a config file specifying the engine URL and device key.
 
-## Status
+Device authentication is handled at the engine level. Each Envoy registers with a unique device key, scoping its memory and conversations to that device.
 
-Early but functional. The core pipeline — routing, task execution, streaming, memory, multi-device auth — works. Active development is focused on refining the task system and improving research capabilities.
+## Design Principles
 
-Not ready for general use. Built for a specific hardware setup. Contributions welcome but expect sharp edges.
+**Tasks over conversations.** The fundamental unit is a task with a goal and a completion state, not an exchange of messages. Conversations are just containers.
+
+**Delegation over monolith.** The Orchestrator reasons about what to do. Specialists reason about how to do it. Neither does the other's job.
+
+**Hardware drives architecture.** GPU assignment, model selection, and power management are explicit decisions made in configuration, not hidden inside code.
+
+**Persistence by default.** Working memory is written to the database on every mutation. A crash mid-task loses nothing except the current model call.
+
+**Local first.** All data stays on your hardware. External network access only happens when a specialist explicitly makes a web request.
