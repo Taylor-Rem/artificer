@@ -1,32 +1,31 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-/// Runtime state for a single Orchestrator task.
-/// Created when a request comes in, updated throughout execution,
-/// persisted to the DB at checkpoints.
+/// Runtime state for a single agent task (Orchestrator or Specialist).
+/// Created when execution begins, updated throughout, persisted at checkpoints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
-    /// The DB row ID for this task — used when persisting state
+    /// Database row ID for this task
     pub id: i64,
 
-    /// The original user request, verbatim
+    /// The original goal/request, verbatim
     pub goal: String,
 
-    /// The Orchestrator's current plan as an ordered list of steps
+    /// The agent's current plan as an ordered list of steps
     pub plan: Vec<String>,
 
-    /// Completed steps with their outcomes (capped to last 10 to stay lean)
+    /// Completed steps with their outcomes (capped to last 10)
     pub progress: Vec<CompletedStep>,
 
-    /// What the Orchestrator is currently working on
+    /// What the agent is currently working on
     pub current_step: Option<String>,
 
-    /// Persistent key-value state scoped to this task.
+    /// Persistent key-value state scoped to this task
     /// e.g. "jobs_applied" = "12", "current_target" = "Acme Corp"
     pub working_memory: HashMap<String, String>,
 
-    /// Set to true when mark_complete tool is called.
-    /// The main loop checks this after every tool dispatch.
+    /// Set to true when task completion is signaled
+    /// The execution loop checks this after every tool dispatch
     pub complete: bool,
 }
 
@@ -57,7 +56,10 @@ impl Task {
             description
         };
 
-        self.progress.push(CompletedStep { description: desc, outcome });
+        self.progress.push(CompletedStep {
+            description: desc,
+            outcome,
+        });
 
         // Keep the list lean — only the last 10 steps matter for context
         if self.progress.len() > 10 {
@@ -73,8 +75,8 @@ impl Task {
         self.working_memory.get(key)
     }
 
-    /// Compact state summary injected into the system prompt after a context prune.
-    /// Gives the model full situational awareness without replaying history.
+    /// Compact state summary injected into system prompt after context prune.
+    /// Gives the agent full situational awareness without replaying history.
     pub fn state_summary(&self) -> String {
         let mut parts = vec![format!("Goal: {}", self.goal)];
 
