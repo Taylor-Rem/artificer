@@ -1,5 +1,4 @@
 pub mod db;
-pub mod macros;
 pub mod schemas;
 pub mod executor;
 pub mod events;

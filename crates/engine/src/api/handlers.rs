@@ -10,7 +10,10 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
 use crate::api::events::{EventSender, SseEvent};
-use crate::api::types::{ChatRequest, ChatResponse, ErrorResponse};
+use crate::api::types::{
+    ChatRequest, ChatResponse, ErrorResponse,
+    RegisterDeviceRequest, RegisterDeviceResponse,
+};
 use crate::orchestrator::Orchestrator;
 use crate::pool::GpuPool;
 
@@ -123,7 +126,7 @@ pub async fn handle_chat(
                 events.error(&e.to_string());
             }
 
-            events.done();
+            events.done(conversation_id);
         });
 
         let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
@@ -163,6 +166,106 @@ pub async fn handle_chat(
             Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     }
+}
+
+/// POST /devices/register
+///
+/// Register a new device. Generates a unique device key and returns it
+/// along with the device_id. The envoy stores both and includes them
+/// in every subsequent request.
+pub async fn handle_register_device(
+    Extension(state): Extension<AppState>,
+    Json(req): Json<RegisterDeviceRequest>,
+) -> Response {
+    let device_key = uuid::Uuid::new_v4().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    // Upsert: if a device with this name exists, update its key and return it.
+    // This lets re-registration work cleanly when credentials are lost.
+    let result = conn.execute(
+        "INSERT INTO devices (device_name, device_key, active, created, last_seen)
+         VALUES (?1, ?2, 1, ?3, ?4)
+         ON CONFLICT(device_name) DO UPDATE SET
+           device_key = excluded.device_key,
+           active = 1,
+           last_seen = excluded.last_seen",
+        rusqlite::params![req.device_name, device_key, now, now],
+    );
+
+    if let Err(e) = result {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+
+    let device_id: i64 = match conn.query_row(
+        "SELECT id FROM devices WHERE device_name = ?1",
+        rusqlite::params![req.device_name],
+        |row| row.get(0),
+    ) {
+        Ok(id) => id,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    println!("Device registered: '{}' (id={})", req.device_name, device_id);
+
+    Json(RegisterDeviceResponse {
+        device_id,
+        device_key,
+    }).into_response()
+}
+
+/// POST /devices/verify
+///
+/// Check whether a stored device_id + device_key pair is still valid.
+/// The envoy calls this at startup before attempting to use cached credentials.
+/// Returns 200 on success, 401 on invalid credentials.
+pub async fn handle_verify_device(
+    Extension(state): Extension<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let device_id = match body["device_id"].as_i64() {
+        Some(id) => id,
+        None => return error_response(StatusCode::BAD_REQUEST, "Missing device_id"),
+    };
+
+    let device_key = match body["device_key"].as_str() {
+        Some(k) => k.to_string(),
+        None => return error_response(StatusCode::BAD_REQUEST, "Missing device_key"),
+    };
+
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let valid = conn.query_row(
+        "SELECT 1 FROM devices WHERE id = ?1 AND device_key = ?2 AND active = 1",
+        rusqlite::params![device_id, device_key],
+        |_| Ok(true),
+    ).unwrap_or(false);
+
+    if !valid {
+        return error_response(StatusCode::UNAUTHORIZED, "Invalid or inactive device credentials");
+    }
+
+    // Update last_seen
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let _ = conn.execute(
+        "UPDATE devices SET last_seen = ?1 WHERE id = ?2",
+        rusqlite::params![now, device_id],
+    );
+
+    StatusCode::OK.into_response()
 }
 
 /// GET /status

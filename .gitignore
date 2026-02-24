@@ -2,4 +2,6 @@
 /.claude
 /.idea
 memory.db
+memory.db-shm
+memory.db-wal
 .env
