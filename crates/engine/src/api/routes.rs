@@ -1,30 +1,11 @@
 use axum::{
-    extract::Request,
-    middleware::{self, Next},
     routing::{get, post},
     Router,
 };
-use std::sync::Arc;
-use super::{handlers, middleware as api_middleware};
-use artificer_shared::db::Db;
+use super::handlers;
 
-pub fn create_router(db: Arc<Db>) -> Router<Arc<Db>> {
-    let protected = Router::new()
-        .route("/chat", post(handlers::handle_chat))
-        .route("/conversations", get(handlers::handle_list_conversations))
-        .route("/devices/verify", post(handlers::handle_verify_device))
-        .route("/jobs/summarize", post(handlers::handle_queue_summarization))
-        .route("/jobs/extract_memory", post(handlers::handle_queue_memory_extraction))
-        .route("/shared/execute", post(handlers::handle_tool_execution))
-        .route_layer(middleware::from_fn(move |req: Request, next: Next| {
-            let db = db.clone();
-            async move {
-                api_middleware::authenticate_device(db, req, next).await
-            }
-        }));
-
+pub fn create_router() -> Router {
     Router::new()
-        .route("/", get(handlers::health_check))
-        .route("/devices/register", post(handlers::handle_register_device))
-        .merge(protected)
+        .route("/chat", post(handlers::handle_chat))
+        .route("/status", get(handlers::handle_status))
 }

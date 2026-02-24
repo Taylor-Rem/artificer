@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
 // Chat endpoint
 #[derive(Deserialize)]
 pub struct ChatRequest {

@@ -46,7 +46,7 @@ impl Archivist {
             return Ok("Error: query cannot be empty".to_string());
         }
 
-        // Device context should already be set by task execution
+        // Device context should already be set by specialist execution
         let params_json = args["params"].as_array()
             .map(|arr| arr.clone())
             .unwrap_or_default();

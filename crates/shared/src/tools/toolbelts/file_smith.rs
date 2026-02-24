@@ -21,7 +21,7 @@ impl Default for FileSmith {
 
 register_toolbelt! {
     FileSmith {
-        description: "Tool for interacting with files and directories and performing related task",
+        description: "Tool for interacting with files and directories and performing related specialist",
         location: ToolLocation::Client,
         tools: {
             "read_file" => read_file {

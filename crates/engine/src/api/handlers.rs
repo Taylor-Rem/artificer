@@ -1,318 +1,205 @@
+use std::sync::Arc;
 use axum::{
-    extract::Json,
+    extract::{Extension, Json},
+    response::{IntoResponse, Response, Sse},
     http::StatusCode,
-    response::{IntoResponse, sse::{Event, Sse}},
 };
-use futures_util::stream::Stream;
-use serde_json::json;
-use axum::extract::State;
-use std::sync::{Arc, Mutex};
-use std::convert::Infallible;
-use artificer_shared::{db::Db, rusqlite};
-use crate::events;
-use crate::task::{conversation::Conversation, PipelineStep, Task};
-use crate::Message;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
+use futures_util::stream::StreamExt;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
-use super::types::*;
+use artificer_shared::db::Db;
+use crate::api::events::{EventSender, SseEvent};
+use crate::api::types::{ChatRequest, ChatResponse, ErrorResponse};
+use crate::orchestrator::Orchestrator;
+use crate::pool::GpuPool;
 
+/// Shared application state injected into every handler via Extension.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: Arc<Db>,
+    pub pool: Arc<GpuPool>,
+}
+
+/// POST /chat
+///
+/// Entry point for all user requests. Responsibilities:
+///   1. Authenticate the device
+///   2. Resolve or create the conversation
+///   3. Persist the user message
+///   4. Acquire a GPU
+///   5. Hand off to the Orchestrator
+///   6. Release the GPU
+///   7. Stream or return the response
 pub async fn handle_chat(
-    State(db): State<Arc<Db>>,
+    Extension(state): Extension<AppState>,
     Json(req): Json<ChatRequest>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Generate unique request ID
-    let request_id = uuid::Uuid::new_v4().to_string();
+) -> Response {
+    // --- Authenticate device ---
+    let device_id = match authenticate_device(&state.db, &req.device_key) {
+        Ok(id) => id,
+        Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e.to_string()),
+    };
 
-    // Create event receiver
-    let rx = events::create_channel(request_id.clone());
+    // --- Resolve conversation ---
+    let conversation_id = match resolve_conversation(&state.db, device_id, req.conversation_id) {
+        Ok(id) => id,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
 
-    tokio::spawn(async move {
-        let conversation = Conversation::new(req.device_id);
-        let events = events::EventSender::new(request_id.clone());
+    // --- Load message count for this conversation (for ordered inserts) ---
+    let message_count = match state.db.get_message_count(conversation_id) {
+        Ok(n) => n,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let mut message_count = message_count;
 
-        let conversation_id = match req.conversation_id {
-            Some(id) => id,
-            None => {
-                let user_message = Message { role: "user".to_string(), content: Some(req.message.clone()), tool_calls: None };
-                match Conversation::new(req.device_id).init(&user_message).await {
-                    Ok(conv_id) => conv_id,
-                    Err(e) => { events.error(format!("Failed to create conversation: {}", e)); return; }
-                }
+    // --- Load conversation history ---
+    let history = match state.db.get_messages(conversation_id) {
+        Ok(msgs) => msgs,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    // --- Persist the user message ---
+    // We do this before acquiring the GPU so the message is always recorded,
+    // even if GPU acquisition fails.
+    let is_first_message = history.is_empty();
+    if let Err(e) = state.db.add_message(
+        conversation_id,
+        None, // task_id not known yet — the Orchestrator creates it
+        "user",
+        Some(&req.message),
+        None,
+        &mut message_count,
+    ) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+
+    // --- Acquire GPU ---
+    let gpu = match state.pool.acquire_interactive() {
+        Some(gpu) => gpu,
+        None => return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "All GPUs are currently busy. Try again shortly.",
+        ),
+    };
+    let gpu_id = gpu.id.clone();
+
+    // --- Stream or non-stream path ---
+    if req.stream.unwrap_or(true) {
+        // Set up SSE channel
+        let (tx, rx) = mpsc::channel::<SseEvent>(32);
+        let events = EventSender::new(tx);
+
+        let db = state.db.clone();
+        let pool = state.pool.clone();
+        let goal = req.message.clone();
+
+        tokio::spawn(async move {
+            let orchestrator = Orchestrator::new(
+                db.clone(),
+                gpu,
+                device_id,
+                Some(events.clone()),
+            );
+
+            let result = orchestrator.run(
+                goal.clone(),
+                conversation_id,
+                history,
+                message_count,
+            ).await;
+
+            // Release GPU before queuing anything else
+            pool.release(&gpu_id);
+
+            // Queue background jobs if this was the first message
+            // (title generation only makes sense once there's content)
+            if is_first_message {
+                let _ = db.queue_conversation_jobs(device_id, conversation_id, &goal);
             }
-        };
 
-        let messages = conversation.get_messages(conversation_id).unwrap_or_default();
-        let message_count = Arc::new(Mutex::new(messages.len() as u32));
-
-        {
-            let mut count = message_count.lock().unwrap();
-            if let Err(e) = conversation.add_message(Some(conversation_id), "user", Some(req.message.as_str()), None, &mut count) {
-                eprintln!("Warning: Failed to save user message: {}", e);
+            if let Err(e) = result {
+                events.error(&e.to_string());
             }
-        }
 
-        // Run router to get pipeline plan
-        let router_response = Task::Router.execute_with_prompt(
-            vec![Message {
-                role: "user".to_string(),
-                content: Some(req.message.clone()),
-                tool_calls: None,
-            }],
-            &db,
-            req.device_id,
-            req.device_key.clone(),
-            false,
+            events.done();
+        });
+
+        let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
+        Sse::new(stream).into_response()
+
+    } else {
+        // Non-streaming: run synchronously, return JSON
+        let orchestrator = Orchestrator::new(
+            state.db.clone(),
+            gpu,
+            device_id,
             None,
-            None,
-            Arc::new(Mutex::new(0u32)),
+        );
+
+        let result = orchestrator.run(
+            req.message.clone(),
+            conversation_id,
+            history,
+            message_count,
         ).await;
 
-        // Parse pipeline steps from router tool call
-        let steps: Vec<PipelineStep> = match router_response {
-            Ok(response) => {
-                if let Some(tool_calls) = &response.tool_calls {
-                    if let Some(call) = tool_calls.first() {
-                        serde_json::from_value(call.function.arguments["steps"].clone())
-                            .unwrap_or_else(|_| default_chat_step(&req.message))
-                    } else {
-                        default_chat_step(&req.message)
-                    }
-                } else {
-                    default_chat_step(&req.message)
-                }
-            }
-            Err(e) => {
-                eprintln!("Router failed: {}", e);
-                default_chat_step(&req.message)
-            }
-        };
+        state.pool.release(&gpu_id);
 
-        // Build full message history (history + current user message)
-        let mut full_messages = messages.clone();
-        full_messages.push(Message {
-            role: "user".to_string(),
-            content: Some(req.message.clone()),
-            tool_calls: None,
-        });
-
-        // Execute the pipeline
-        match Task::execute_pipeline(
-            steps,
-            &db,
-            req.device_id,
-            req.device_key.clone(),
-            Some(events.clone()),
-            conversation_id,
-            message_count.clone(),
-            full_messages,
-        ).await {
-            Ok(response) => {
-                if let Some(content) = &response.content {
-                    let mut count = message_count.lock().unwrap();
-                    if let Err(e) = conversation.add_message(Some(conversation_id), "assistant", Some(content.as_str()), None, &mut count) {
-                        eprintln!("Warning: Failed to save assistant message: {}", e);
-                    }
-                }
-                events.complete(conversation_id);
-            }
-            Err(e) => {
-                events.error(format!("Pipeline execution failed: {}", e));
-            }
+        if is_first_message {
+            let _ = state.db.queue_conversation_jobs(
+                device_id,
+                conversation_id,
+                &req.message,
+            );
         }
-    });
 
-    // Convert broadcast receiver to SSE stream
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|result| {
-            match result {
-                Ok(event) => {
-                    let json = serde_json::to_string(&event).unwrap();
-                    Some(Ok(Event::default().data(json)))
-                }
-                Err(_) => None,
-            }
-        });
-
-    Sse::new(stream)
+        match result {
+            Ok(content) => Json(ChatResponse {
+                conversation_id,
+                content,
+            }).into_response(),
+            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
 }
 
-pub async fn handle_register_device(
-    State(db): State<Arc<Db>>,
-    Json(req): Json<RegisterDeviceRequest>,
+/// GET /status
+pub async fn handle_status(
+    Extension(state): Extension<AppState>,
 ) -> impl IntoResponse {
-    let conn = match db.lock() {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Database error: {}", e) })),
-            );
-        }
-    };
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
-    // Check if device exists by name
-    match conn.query_row(
-        "SELECT id, device_key FROM devices WHERE device_name = ?1",
-        rusqlite::params![req.device_name],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-    ) {
-        Ok((device_id, device_key)) => {
-            // Update last_seen
-            let _ = conn.execute(
-                "UPDATE devices SET last_seen = ?1 WHERE id = ?2",
-                rusqlite::params![now, device_id],
-            );
-
-            (StatusCode::OK, Json(json!({
-                "device_id": device_id,
-                "device_key": device_key
-            })))
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            // Generate secure random key
-            use uuid::Uuid;
-            let device_key = Uuid::new_v4().to_string();
-
-            let metadata = json!({
-                "registered_via": "api",
-            });
-
-            match conn.execute(
-                "INSERT INTO devices (device_name, device_key, created, last_seen, metadata)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![req.device_name, device_key, now, now, metadata.to_string()],
-            ) {
-                Ok(_) => {
-                    let device_id = conn.last_insert_rowid();
-                    (StatusCode::OK, Json(json!({
-                        "device_id": device_id,
-                        "device_key": device_key
-                    })))
-                }
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("Failed to create device: {}", e) })),
-                ),
-            }
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Database error: {}", e) })),
-        ),
-    }
-}
-pub async fn handle_list_conversations(
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let device_id: i64 = match params.get("device_id").and_then(|s| s.parse().ok()) {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Missing or invalid device_id parameter" })),
-            );
-        }
-    };
-
-    let db = Db::default();
-    let conn = match db.lock() {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Database error: {}", e) })),
-            );
-        }
-    };
-
-    let mut stmt = match conn.prepare(
-        "SELECT id, title, created, last_accessed FROM conversations
-         WHERE device_id = ?1
-         ORDER BY last_accessed DESC",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Query error: {}", e) })),
-            );
-        }
-    };
-
-    let conversations: Vec<ConversationInfo> = stmt
-        .query_map(rusqlite::params![device_id], |row| {
-            Ok(ConversationInfo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                created: row.get(2)?,
-                last_accessed: row.get(3)?,
-            })
-        })
-        .ok()
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default();
-
-    (StatusCode::OK, Json(serde_json::to_value(ListConversationsResponse { conversations }).unwrap()))
+    let gpu_status = state.pool.status();
+    Json(serde_json::json!({
+        "status": "ok",
+        "gpus": gpu_status,
+    }))
 }
 
-pub async fn handle_queue_summarization(Json(req): Json<QueueJobRequest>) -> impl IntoResponse {
-    let conversation = Conversation::new(req.device_id);
+// ============================================================================
+// HELPERS
+// ============================================================================
 
-    match conversation.summarize(req.conversation_id) {
-        Ok(job_id) => (
-            StatusCode::OK,
-            Json(json!({ "job_id": job_id, "status": "queued" }))
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to queue job: {}", e) }))
-        ),
+fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<i64> {
+    db.query_row_optional(
+        "SELECT id FROM devices WHERE device_key = ?1 AND active = 1",
+        rusqlite::params![device_key],
+        |row| row.get(0),
+    )?
+        .ok_or_else(|| anyhow::anyhow!("Invalid or inactive device key"))
+}
+
+fn resolve_conversation(
+    db: &Db,
+    device_id: i64,
+    existing_id: Option<u64>,
+) -> anyhow::Result<u64> {
+    match existing_id {
+        Some(id) => Ok(id),
+        None => db.create_conversation(device_id),
     }
 }
 
-pub async fn handle_queue_memory_extraction(Json(req): Json<QueueJobRequest>) -> impl IntoResponse {
-    let conversation = Conversation::new(req.device_id);
-
-    match conversation.extract_memory(req.conversation_id) {
-        Ok(job_id) => (
-            StatusCode::OK,
-            Json(json!({ "job_id": job_id, "status": "queued" }))
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to queue job: {}", e) }))
-        ),
-    }
-}
-
-pub async fn handle_tool_execution(Json(req): Json<ToolExecutionRequest>) -> impl IntoResponse {
-    match artificer_shared::use_tool(&req.tool_name, &req.arguments) {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(json!({ "result": result }))
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Tool execution failed: {}", e) }))
-        ),
-    }
-}
-fn default_chat_step(message: &str) -> Vec<PipelineStep> {
-    vec![PipelineStep {
-        task: "chat".to_string(),
-        directions: message.to_string(),
-    }]
-}
-pub async fn handle_verify_device() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({ "valid": true })))
-}
-
-pub async fn health_check() -> &'static str {
-    "Artificer is running"
+fn error_response(status: StatusCode, message: &str) -> Response {
+    (status, Json(ErrorResponse { error: message.to_string() })).into_response()
 }

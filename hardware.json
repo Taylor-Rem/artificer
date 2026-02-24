@@ -1,0 +1,16 @@
+{
+  "gpus": [
+    {
+      "id": "p40",
+      "url": "http://localhost:11435",
+      "model": "qwen2.5:32b-instruct-q4_K_M",
+      "role": "interactive"
+    },
+    {
+      "id": "rtx3070",
+      "url": "http://localhost:11434",
+      "model": "qwen3:8b",
+      "role": "background"
+    }
+  ]
+}

@@ -1,8 +1,11 @@
+use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::watch;
 
 use artificer_engine::api;
-use artificer_engine::task::worker::Worker;
+use artificer_engine::api::handlers::AppState;
+use artificer_engine::background::Worker;
+use artificer_engine::pool::GpuPool;
 use artificer_shared::db;
 
 #[tokio::main]
@@ -13,18 +16,21 @@ async fn main() -> Result<()> {
     // Initialize database
     let db = db::init();
 
-    // Register tasks
-    use artificer_engine::task::Task;
-    for task in Task::all() {
-        db.register_task(task.task_id(), task.title(), task.description())?;
-    }
+    // Initialize GPU pool from hardware.json
+    let pool = Arc::new(GpuPool::load()?);
+
+    // Build shared application state
+    let state = AppState {
+        db: db.clone(),
+        pool: pool.clone(),
+    };
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Start worker
+    // Start background worker
     let worker_shutdown_rx = shutdown_rx.clone();
-    let worker = Worker::new(2, worker_shutdown_rx);
+    let worker = Worker::new(db.clone(), pool.clone(), 2, worker_shutdown_rx);
     let worker_handle = tokio::spawn(async move {
         if let Err(e) = worker.run().await {
             eprintln!("Worker crashed: {}", e);
@@ -35,7 +41,7 @@ async fn main() -> Result<()> {
     // Start API server
     let api_shutdown_rx = shutdown_rx.clone();
     let api_handle = tokio::spawn(async move {
-        if let Err(e) = api::start_server(api_shutdown_rx).await {
+        if let Err(e) = api::start_server(state, api_shutdown_rx).await {
             eprintln!("API server crashed: {}", e);
         }
     });
