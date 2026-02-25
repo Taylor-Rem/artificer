@@ -5,3 +5,4 @@ memory.db
 memory.db-shm
 memory.db-wal
 .env
+.DS_Store
