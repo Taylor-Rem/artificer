@@ -1,7 +1,9 @@
-use artificer_shared::Message;
+use std::sync::Arc;
+use artificer_shared::db::Db;
 use crate::pool::GpuHandle;
 
 pub struct AgentContext {
+    pub(crate) conversation_id: u64,
     pub gpu: GpuHandle,
-    pub conversation: Vec<Message>
+    pub db: Arc<Db>
 }

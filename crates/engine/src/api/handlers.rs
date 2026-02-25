@@ -9,13 +9,12 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
-use crate::agent::AgentContext;
+use crate::agent::{Agent, AgentContext, implementations::AgentType};
 use crate::api::events::{EventSender, SseEvent};
 use crate::api::types::{
     ChatRequest, ChatResponse, ErrorResponse,
     RegisterDeviceRequest, RegisterDeviceResponse,
 };
-use crate::agent::implementations::Orchestrator;
 use crate::pool::GpuPool;
 
 /// Shared application state injected into every handler via Extension.
@@ -51,34 +50,6 @@ pub async fn handle_chat(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    // --- Load message count for this conversation (for ordered inserts) ---
-    let message_count = match state.db.get_message_count(conversation_id) {
-        Ok(n) => n,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let mut message_count = message_count;
-
-    // --- Load conversation history ---
-    let history = match state.db.get_messages(conversation_id) {
-        Ok(msgs) => msgs,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    // --- Persist the user message ---
-    // We do this before acquiring the GPU so the message is always recorded,
-    // even if GPU acquisition fails.
-    let is_first_message = history.is_empty();
-    if let Err(e) = state.db.add_message(
-        conversation_id,
-        None, // task_id not known yet — the Orchestrator creates it
-        "user",
-        Some(&req.message),
-        None,
-        &mut message_count,
-    ) {
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
-    }
-
     // --- Acquire GPU ---
     let gpu = match state.pool.acquire_interactive() {
         Some(gpu) => gpu,
@@ -98,7 +69,12 @@ pub async fn handle_chat(
     let goal = req.message.clone();
 
     tokio::spawn(async move {
-        let orchestrator = Orchestrator {};
+        let context = AgentContext {
+            conversation_id,
+            gpu,
+            db
+        };
+        let orchestrator = Agent::new(AgentType::Orchestrator, context);
 
         let result = orchestrator.execute(
             &goal,

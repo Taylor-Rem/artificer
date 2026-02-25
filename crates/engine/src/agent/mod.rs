@@ -1,5 +1,6 @@
 mod schema;
 pub mod implementations;
+pub mod macros;
 
 use anyhow::Result;
 use reqwest::Client;
@@ -8,38 +9,81 @@ pub use schema::{AgentResponse, AgentContext, AgentRoles};
 
 pub struct Agent {
     pub name: &'static str,
+    description: &'static str,
+    role: AgentRoles,
     pub system_prompt: String,
     pub tools: Option<Vec<Tool>>,
-    pub requires_full_context: bool,
+    pub context: AgentContext,
 }
 
 impl Agent {
     fn execute(&self, goal: &str, context: AgentContext) -> Result<AgentResponse> {
-        let mut messages = self.build_messages(goal, context.conversation.clone());
+        let mut messages = self.build_messages(goal);
         let client = Client::new();
         loop {
             let response = self.call_model();
             AgentResponse::complete("ok".to_string());
         }
     }
-    fn build_messages(&self, goal: &str, conversation: Vec<Message>) -> Vec<Message> {
-        let mut messages = vec![Message {
-            role: "system".to_string(),
-            content: Some(self.system_prompt()),
-            tool_calls: None
-        }];
-        if self.requires_full_context {
-            messages.extend(conversation);
-        } else {
-            messages.push(Message {
-                role: "user".to_string(),
-                content: Some(goal.to_string()),
-                tool_calls: None
-            });
-        }
-        messages
-    }
-    fn call_model(&self) -> AgentResponse {
+    fn build_messages(&self, goal: &str) -> Vec<Message> {
+        match self.role {
+            AgentRoles::Orchestrator => {
+                let mut messages = self.context.db
+                    .get_messages(self.context.conversation_id)
+                    .unwrap_or_default();
+                if messages.is_empty() {
+                    vec!(
+                        Message {
+                            role: "system".to_string(),
+                            content: Some(self.build_system_prompt()),
+                            tool_calls: None
+                        },
+                        Message {
+                            role: "user".to_string(),
+                            content: Some(goal.to_string()),
+                            tool_calls: None
+                        }
+                    )
+                } else {
+                    messages.push(
+                        Message {
+                            role: "user".to_string(),
+                            content: Some(goal.to_string()),
+                            tool_calls: None
+                        }
+                    );
+                    messages
+                }
 
-    };
+            },
+            AgentRoles::Specialist => {
+                vec!(
+                    Message {
+                        role: "system".to_string(),
+                        content: Some(self.build_system_prompt()),
+                        tool_calls: None
+                    },
+                    Message {
+                        role: "user".to_string(),
+                        content: Some(goal.to_string()),
+                        tool_calls: None
+                    }
+                )
+            }
+        }
+    }
+    // fn call_model(&self) -> AgentResponse {
+    //
+    // };
+
+    fn build_system_prompt(&self) -> String {
+        let mut system_prompt = match self.role {
+            AgentRoles::Orchestrator => schema::prompts::ORCHESTRATOR_BASE,
+            AgentRoles::Specialist => schema::prompts::SPECIALIST_BASE,
+        }.to_string();
+
+        system_prompt.push('\n');
+        system_prompt.push_str(&self.system_prompt);
+        system_prompt
+    }
 }
