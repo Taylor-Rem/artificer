@@ -68,6 +68,7 @@ pub async fn handle_chat(
 
     let db = state.db.clone();
     let gpu_pool = state.gpu_pool.clone();
+    let agent_pool = state.agent_pool.clone();
     let goal = req.message.clone();
 
     tokio::spawn(async move {
@@ -77,7 +78,7 @@ pub async fn handle_chat(
             gpu,
             db
         };
-        let orchestrator = Agent::new(AgentType::Orchestrator, context);
+        let orchestrator = agent_pool.get("orchestrator");
 
         let result = orchestrator.execute(
             &goal,
