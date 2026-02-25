@@ -5,7 +5,7 @@ mod task;
 
 pub use response::AgentResponse;
 pub use context::AgentContext;
-
+pub use task::{ Task};
 
 pub enum AgentRoles {
     Orchestrator,

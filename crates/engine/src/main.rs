@@ -17,12 +17,15 @@ async fn main() -> Result<()> {
     let db = db::init();
 
     // Initialize GPU pool from hardware.json
-    let pool = Arc::new(GpuPool::load()?);
+    let gpu_pool = Arc::new(GpuPool::load()?);
+    let agent_pool = Arc::new(AgentPool::new());
+
 
     // Build shared application state
     let state = AppState {
         db: db.clone(),
-        pool: pool.clone(),
+        gpu_pool: gpu_pool.clone(),
+        agent_pool
     };
 
     // Create shutdown channel
@@ -30,7 +33,7 @@ async fn main() -> Result<()> {
 
     // Start background worker
     let worker_shutdown_rx = shutdown_rx.clone();
-    let worker = Worker::new(db.clone(), pool.clone(), 2, worker_shutdown_rx);
+    let worker = Worker::new(db.clone(), gpu_pool.clone(), 2, worker_shutdown_rx);
     let worker_handle = tokio::spawn(async move {
         if let Err(e) = worker.run().await {
             eprintln!("Worker crashed: {}", e);

@@ -15,13 +15,15 @@ use crate::api::types::{
     ChatRequest, ChatResponse, ErrorResponse,
     RegisterDeviceRequest, RegisterDeviceResponse,
 };
-use crate::pool::GpuPool;
+use crate::pool::AgentPool;
+use crate::pool::gpu_pool::GpuPool;
 
 /// Shared application state injected into every handler via Extension.
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
-    pub pool: Arc<GpuPool>,
+    pub gpu_pool: Arc<GpuPool>,
+    pub agent_pool: Arc<AgentPool>,
 }
 
 /// POST /chat
@@ -51,7 +53,7 @@ pub async fn handle_chat(
     };
 
     // --- Acquire GPU ---
-    let gpu = match state.pool.acquire_interactive() {
+    let gpu = match state.gpu_pool.acquire_interactive() {
         Some(gpu) => gpu,
         None => return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -65,11 +67,12 @@ pub async fn handle_chat(
     let events = EventSender::new(tx);
 
     let db = state.db.clone();
-    let pool = state.pool.clone();
+    let gpu_pool = state.gpu_pool.clone();
     let goal = req.message.clone();
 
     tokio::spawn(async move {
         let context = AgentContext {
+            device_id,
             conversation_id,
             gpu,
             db
@@ -82,7 +85,7 @@ pub async fn handle_chat(
         ).await;
 
         // Release GPU before queuing anything else
-        pool.release(&gpu_id);
+        gpu_pool.release(&gpu_id);
 
         // Queue background jobs if this was the first message
         // (title generation only makes sense once there's content)
@@ -216,7 +219,7 @@ pub async fn handle_status(
 // HELPERS
 // ============================================================================
 
-fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<i64> {
+fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<u64> {
     db.query_row_optional(
         "SELECT id FROM devices WHERE device_key = ?1 AND active = 1",
         rusqlite::params![device_key],
@@ -227,7 +230,7 @@ fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<i64> {
 
 fn resolve_conversation(
     db: &Db,
-    device_id: i64,
+    device_id: u64,
     existing_id: Option<u64>,
 ) -> anyhow::Result<u64> {
     match existing_id {

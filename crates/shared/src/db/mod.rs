@@ -114,7 +114,7 @@ impl Db {
 
 impl Db {
     /// Create a new conversation for a device. Returns the new conversation_id.
-    pub fn create_conversation(&self, device_id: i64) -> Result<u64> {
+    pub fn create_conversation(&self, device_id: u64) -> Result<u64> {
         let conn = self.lock()?;
         let now = now();
 
@@ -251,18 +251,18 @@ impl Db {
 
 impl Db {
     /// Create a new task record. Returns the task_id.
-    pub fn create_task(&self, device_id: i64, conversation_id: u64, goal: &str) -> Result<i64> {
+    pub fn create_task(&self, device_id: u64, conversation_id: u64, goal: &str) -> Result<u64> {
         let now = now();
         let conn = self.lock()?;
 
         conn.execute(
             "INSERT INTO tasks
              (device_id, conversation_id, goal, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'in_progress', ?4, ?5)",
-            rusqlite::params![device_id, conversation_id as i64, goal, now, now],
+             VALUES (?1, ?2, ?3, 'not_started', ?4, ?5)",
+            rusqlite::params![device_id, conversation_id as u64, goal, now, now],
         )?;
 
-        Ok(conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid() as u64)
     }
 
     /// Checkpoint: persist current plan and working memory.

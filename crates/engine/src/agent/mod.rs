@@ -5,23 +5,24 @@ pub mod macros;
 use anyhow::Result;
 use reqwest::Client;
 use artificer_shared::{Message, Tool};
-pub use schema::{AgentResponse, AgentContext, AgentRoles};
+pub use schema::{AgentResponse, AgentContext, AgentRoles, Task};
+pub use implementations::AgentType;
 
 pub struct Agent {
     pub name: &'static str,
     description: &'static str,
     role: AgentRoles,
-    pub system_prompt: String,
+    pub system_prompt: &'static str,
     pub tools: Option<Vec<Tool>>,
-    pub context: AgentContext,
 }
 
 impl Agent {
     fn execute(&self, goal: &str, context: AgentContext) -> Result<AgentResponse> {
+        let task = Task::new(context, goal);
         let mut messages = self.build_messages(goal);
         let client = Client::new();
         loop {
-            let response = self.call_model();
+            // let response = self.call_model();
             AgentResponse::complete("ok".to_string());
         }
     }
