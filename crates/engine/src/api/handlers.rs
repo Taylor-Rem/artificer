@@ -9,12 +9,13 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
+use crate::agent::AgentContext;
 use crate::api::events::{EventSender, SseEvent};
 use crate::api::types::{
     ChatRequest, ChatResponse, ErrorResponse,
     RegisterDeviceRequest, RegisterDeviceResponse,
 };
-use crate::orchestrator::Orchestrator;
+use crate::agent::implementations::Orchestrator;
 use crate::pool::GpuPool;
 
 /// Shared application state injected into every handler via Extension.
@@ -88,84 +89,40 @@ pub async fn handle_chat(
     };
     let gpu_id = gpu.id.clone();
 
-    // --- Stream or non-stream path ---
-    if req.stream.unwrap_or(true) {
-        // Set up SSE channel
-        let (tx, rx) = mpsc::channel::<SseEvent>(32);
-        let events = EventSender::new(tx);
+    // Set up SSE channel
+    let (tx, rx) = mpsc::channel::<SseEvent>(32);
+    let events = EventSender::new(tx);
 
-        let db = state.db.clone();
-        let pool = state.pool.clone();
-        let goal = req.message.clone();
+    let db = state.db.clone();
+    let pool = state.pool.clone();
+    let goal = req.message.clone();
 
-        tokio::spawn(async move {
-            let orchestrator = Orchestrator::new(
-                db.clone(),
-                gpu,
-                device_id,
-                Some(events.clone()),
-            );
+    tokio::spawn(async move {
+        let orchestrator = Orchestrator {};
 
-            let result = orchestrator.run(
-                goal.clone(),
-                conversation_id,
-                history,
-                message_count,
-            ).await;
-
-            // Release GPU before queuing anything else
-            pool.release(&gpu_id);
-
-            // Queue background jobs if this was the first message
-            // (title generation only makes sense once there's content)
-            if is_first_message {
-                let _ = db.queue_conversation_jobs(device_id, conversation_id, &goal);
-            }
-
-            if let Err(e) = result {
-                events.error(&e.to_string());
-            }
-
-            events.done(conversation_id);
-        });
-
-        let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
-        Sse::new(stream).into_response()
-
-    } else {
-        // Non-streaming: run synchronously, return JSON
-        let orchestrator = Orchestrator::new(
-            state.db.clone(),
-            gpu,
-            device_id,
-            None,
-        );
-
-        let result = orchestrator.run(
-            req.message.clone(),
-            conversation_id,
-            history,
-            message_count,
+        let result = orchestrator.execute(
+            &goal,
+            AgentContext {gpu, conversation: history}
         ).await;
 
-        state.pool.release(&gpu_id);
+        // Release GPU before queuing anything else
+        pool.release(&gpu_id);
 
+        // Queue background jobs if this was the first message
+        // (title generation only makes sense once there's content)
         if is_first_message {
-            let _ = state.db.queue_conversation_jobs(
-                device_id,
-                conversation_id,
-                &req.message,
-            );
+            let _ = db.queue_conversation_jobs(device_id, conversation_id, &goal);
         }
 
-        match result {
-            Ok(content) => Json(ChatResponse {
-                conversation_id,
-                content,
-            }).into_response(),
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        if let Err(e) = result {
+            events.error(&e.to_string());
         }
-    }
+
+        events.done(conversation_id);
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
+    Sse::new(stream).into_response()
 }
 
 /// POST /devices/register
