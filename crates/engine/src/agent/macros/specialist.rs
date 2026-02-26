@@ -16,29 +16,8 @@ macro_rules! define_agents {
         }
 
         impl AgentType {
-            pub fn as_str(&self) -> &'static str {
+            pub fn build(self, client: Client) -> Agent {
                 match self {
-                    $(Self::$name => stringify!($name)),*
-                }
-            }
-
-            pub fn from_str(s: &str) -> Option<Self> {
-                match s {
-                    $(stringify!($name) => Some(Self::$name),)*
-                    _ => None,
-                }
-            }
-
-            // Generate list of all agent types at compile time
-            pub const fn all() -> &'static [AgentType] {
-                &[$(AgentType::$name),*]
-            }
-        }
-
-        impl Agent {
-            // Agent is now stateless - no context or task
-            pub fn new(agent_type: AgentType) -> Self {
-                match agent_type {
                     $(
                         AgentType::$name => {
                             let mut tools = $tools.unwrap_or_default();
@@ -46,10 +25,14 @@ macro_rules! define_agents {
                             // Conditionally merge task tools
                             $(
                                 if $has_task_tools {
+                                    // Import from task module
+                                    use crate::agent::schema::task::TASK_TOOLS;
+
                                     let task_tools: Vec<Tool> = TASK_TOOLS
                                         .iter()
-                                        .map(|def| Tool::from(def))
+                                        .map(|schema| schema.to_tool())
                                         .collect();
+
                                     tools.extend(task_tools);
                                 }
                             )?
@@ -60,16 +43,11 @@ macro_rules! define_agents {
                                 role: $role,
                                 system_prompt: $prompt,
                                 tools,
+                                client,
                             }
                         }
                     ),*
                 }
-            }
-
-            // Execute with context and goal passed in
-            pub fn execute(&self, context: AgentContext, goal: String) -> Result<AgentResponse> {
-                let task = Task::new(&context, &goal);
-                // ... execution logic
             }
         }
     };

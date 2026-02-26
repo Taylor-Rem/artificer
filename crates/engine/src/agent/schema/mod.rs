@@ -9,5 +9,6 @@ pub use task::{ Task};
 
 pub enum AgentRoles {
     Orchestrator,
-    Specialist
+    Specialist,
+    Background
 }

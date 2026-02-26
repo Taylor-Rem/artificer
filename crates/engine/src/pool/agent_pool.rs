@@ -1,30 +1,36 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use reqwest::Client;
 use crate::agent::{Agent, AgentType};
 
 pub struct AgentPool {
     agents: HashMap<&'static str, Agent>,
+    pub client: Client
 }
 
 impl AgentPool {
     pub fn new() -> Self {
         let mut agents = HashMap::new();
 
-        // Automatically populate from all agent types
         for agent_type in AgentType::all() {
-            let agent = Agent::new(*agent_type);
+            let agent = agent_type.build();
             agents.insert(agent.name, agent);
         }
 
-        Self { agents }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .pool_max_idle_per_host(10)
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self { agents, client }
     }
 
     pub fn get(&self, name: &str) -> Option<&Agent> {
         self.agents.get(name)
     }
 
-    pub fn all(&self) -> impl Iterator<Item = &Agent> {
-        self.agents.values()
+    pub fn client(&self) -> &Client {
+        &self.client
     }
 }
 

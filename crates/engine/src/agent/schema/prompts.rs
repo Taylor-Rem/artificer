@@ -64,3 +64,7 @@ When you receive a request, determine your mode of operation:
 - Report clearly what you did and what you found
 - Don't stop at partial results
 ";
+
+pub const BACKGROUND_BASE: &str = "
+You carry out a simple task
+";

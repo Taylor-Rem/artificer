@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
-use crate::agent::{Agent, AgentContext, implementations::AgentType};
+use crate::agent::{Agent, AgentContext, implementations::AgentType, AgentExecution};
 use crate::api::events::{EventSender, SseEvent};
 use crate::api::types::{
     ChatRequest, ChatResponse, ErrorResponse,
@@ -78,12 +78,8 @@ pub async fn handle_chat(
             gpu,
             db
         };
-        let orchestrator = agent_pool.get("orchestrator");
-
-        let result = orchestrator.execute(
-            &goal,
-            AgentContext {gpu, conversation: history}
-        ).await;
+        let orchestrator = AgentExecution::new(agent: agent_pool.get("orchestrator").unwrap(), context, &goal);
+        let result = orchestrator.execute().await;
 
         // Release GPU before queuing anything else
         gpu_pool.release(&gpu_id);
