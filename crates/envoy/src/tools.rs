@@ -32,10 +32,13 @@ async fn handle_tool_execution(
 
     match tools::use_tool(&req.tool_name, &req.arguments) {
         Ok(result) => (StatusCode::OK, Json(json!({ "result": result }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Tool execution failed: {}", e) })),
-        ),
+        Err(e) => {
+            eprintln!("[tool-server] Tool '{}' failed: {}", req.tool_name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Tool execution failed: {}", e) })),
+            )
+        }
     }
 }
 

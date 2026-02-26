@@ -1,17 +1,14 @@
 use anyhow::Result;
-use reqwest::Client;
 use serde_json::Value;
 use artificer_shared::db::{Db, sanitize_title};
 use artificer_shared::rusqlite;
 
-use crate::pool::GpuHandle;
-use crate::specialist::Specialist;
-use crate::Message;
+use crate::pool::{AgentPool, GpuHandle};
 
 pub async fn execute(
     db: &Db,
     gpu: &GpuHandle,
-    client: &Client,
+    pool: &AgentPool,
     args: &Value,
 ) -> Result<String> {
     let conversation_id = args["conversation_id"].as_i64()
@@ -20,27 +17,46 @@ pub async fn execute(
     let user_message = args["user_message"].as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing user_message"))?;
 
-    let specialist = Specialist::find("title_generation")
-        .ok_or_else(|| anyhow::anyhow!("title_generation specialist not found"))?;
+    let agent = pool
+        .get("TitleGenerator")
+        .ok_or_else(|| anyhow::anyhow!("TitleGenerator agent not found in pool"))?;
 
-    let messages = specialist.build_messages(
-        vec![Message {
-            role: "user".to_string(),
-            content: Some(user_message.to_string()),
-            tool_calls: None,
-        }],
-        None,
-    );
+    let request_body = serde_json::json!({
+        "model": gpu.model,
+        "messages": [
+            { "role": "system", "content": agent.system_prompt },
+            { "role": "user",   "content": user_message },
+        ],
+        "stream": false,
+    });
 
-    let response = specialist.execute(gpu, messages, None, client).await?;
-    let raw_title = response.content.unwrap_or_default();
+    let url = format!("{}/api/chat", gpu.url);
+    let response = pool
+        .client()
+        .post(&url)
+        .json(&request_body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "LLM call failed with status {}",
+            response.status()
+        ));
+    }
+
+    let body: Value = response.json().await?;
+    let raw_title = body["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
     let sanitized = sanitize_title(&raw_title);
-
     if sanitized.is_empty() {
         return Err(anyhow::anyhow!("Generated title was empty after sanitization"));
     }
 
-    // Get device_id for uniqueness check
     let device_id: i64 = db.query_row_optional(
         "SELECT device_id FROM conversations WHERE id = ?1",
         rusqlite::params![conversation_id],

@@ -1,29 +1,44 @@
 use crate::define_agents;
-use crate::agent::{Agent, AgentContext, AgentRoles};
-use artificer_shared::Tool;
-
-// Import task tools const
-use crate::orchestrator::tools::TASK_TOOLS;
+use crate::agent::{AgentRoles, ExecutionMode};
 
 define_agents! {
     Orchestrator: AgentRoles::Orchestrator => {
-        description: "Coordinates tasks and manages workflow",
-        system_prompt: "You are an orchestrator...",
-        tools: Some(vec![/* orchestrator-specific tools */]),
-        task_tools: true,  // Gets task management tools
-    },
-
-    WebResearcher: AgentRoles::Specialist => {
-        description: "Searches the web for information",
-        system_prompt: "You are a web research specialist...",
-        tools: Some(vec![/* web search tools */]),
-        task_tools: true,  // Also gets task tools
+        description: "Primary orchestrator that coordinates tasks and manages workflow",
+        execution_mode: ExecutionMode::Agentic,
+        system_prompt: include_str!("../prompts/orchestrator.txt"),
+        toolbelts: [],
+        task_tools: true,
     },
 
     FileSmith: AgentRoles::Specialist => {
-        description: "Manages files and documents",
-        system_prompt: "You are a file system specialist...",
-        tools: Some(vec![/* file tools */]),
+        description: "File system specialist for reading, writing, and manipulating files",
+        execution_mode: ExecutionMode::Agentic,
+        system_prompt: include_str!("../prompts/file_smith.txt"),
+        toolbelts: ["FileSmith::"],
         task_tools: true,
+    },
+
+    WebResearcher: AgentRoles::Specialist => {
+        description: "Web research specialist for searching and fetching web content",
+        execution_mode: ExecutionMode::Agentic,
+        system_prompt: include_str!("../prompts/web_researcher.txt"),
+        toolbelts: ["WebSearch::"],
+        task_tools: true,
+    },
+
+    Archivist: AgentRoles::Specialist => {
+        description: "Conversation history and database query specialist",
+        execution_mode: ExecutionMode::Agentic,
+        system_prompt: include_str!("../prompts/archivist.txt"),
+        toolbelts: ["Archivist::"],
+        task_tools: true,
+    },
+
+    TitleGenerator: AgentRoles::Background => {
+        description: "Generates concise titles for conversations",
+        execution_mode: ExecutionMode::OneTime,
+        system_prompt: "You generate concise, descriptive titles (3-6 words) for conversations. Output only the title, no explanation.",
+        toolbelts: [],
+        task_tools: false,
     },
 }

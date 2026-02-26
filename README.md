@@ -8,7 +8,7 @@ Most AI interfaces are chatbots. You ask something, they respond, the interactio
 
 It runs entirely on your hardware. No data leaves your machine. Accessible from anywhere via Tailscale.
 
-## Architecture
+### Installation
 
 Artificer is a distributed system with two components:
 
