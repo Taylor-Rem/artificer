@@ -1,177 +1,166 @@
 # Artificer
 
-A self-hosted AI infrastructure system built in Rust. Artificer runs on your own hardware and provides a persistent, autonomous agent capable of completing long-running tasks.
+A self-hosted AI infrastructure system built in Rust. Artificer runs on your own hardware and provides a persistent, autonomous agent capable of completing long-running tasks — not just answering questions.
 
-## Quick Start
+## What It Is
 
-### Prerequisites
+Most AI interfaces are chatbots. You ask something, they respond, the interaction ends. Artificer is built around a different model: you give it a goal, and it works until the goal is achieved. It plans, delegates to specialists, evaluates its own progress, and keeps going until the work is actually done.
 
-- Rust (stable toolchain)
-- Ollama with models loaded on configured GPUs
-- (Optional) Tailscale for remote access
+It runs entirely on your hardware. No data leaves your machine. Accessible from anywhere via Tailscale.
 
 ### Installation
 
-1. Clone the repository
-2. Create `hardware.json` in the workspace root:
+Artificer is a distributed system with two components:
+
+**Engine** — The server. Runs on your primary machine alongside your GPUs. Hosts the Orchestrator, manages GPU assignment, maintains the database, and runs background jobs.
+
+**Envoy** — A lightweight client. Runs on any machine. Sends requests to the engine over HTTP and handles client-side tool execution (file operations run where the files are).
+
+### The Orchestrator
+
+The core of the engine. When a request comes in, the Orchestrator:
+
+1. Creates a task record and defines success criteria
+2. Sets a plan using its working memory tools
+3. Delegates work to specialists
+4. Evaluates results against the original goal
+5. Continues until the goal is genuinely complete
+
+The Orchestrator holds the goal and reasons about progress. It does not do the work itself — it directs specialists and synthesizes their output. This keeps its context clean across long tasks and allows it to work through complex multi-step problems without losing the thread.
+
+### Specialists
+
+Specialists are focused agents with their own reasoning loops. The Orchestrator delegates to them with specific instructions and gets back synthesized conclusions — not raw tool output.
+
+**Interactive specialists** run on the primary GPU alongside the Orchestrator:
+- `web_research` — Searches the web, fetches pages, synthesizes findings
+- `file_smith` — Reads, writes, and manipulates files on the Envoy client
+
+**Background specialists** run on a secondary GPU while the primary stays available:
+- `title_generation` — Generates conversation and task titles
+- `summarization` — Summarizes completed conversations and tasks
+- `memory_extraction` — Extracts long-term facts, preferences, and context
+
+### GPU Pool
+
+Hardware is declared in `hardware.json` at the workspace root. The engine reads this at startup and manages GPU assignment at runtime.
 
 ```json
 {
   "gpus": [
     {
-      "id": "primary",
-      "url": "http://localhost:11434",
+      "id": "p40_primary",
+      "url": "http://localhost:11435",
       "model": "qwen2.5:32b-instruct-q4_K_M",
       "role": "interactive"
+    },
+    {
+      "id": "rtx3070_background",
+      "url": "http://localhost:11434",
+      "model": "qwen3:8b",
+      "role": "background"
     }
   ]
 }
 ```
 
-3. Configure environment (optional):
+Interactive GPUs are assigned to Orchestrator tasks. Background GPUs handle summarization, title generation, and memory extraction. Adding a second interactive GPU automatically enables two concurrent Orchestrator tasks — no code changes required.
 
-```bash
-cp .env.example .env
-# Edit .env with your settings
+### Database
+
+SQLite with WAL mode. All state is local.
+
+- **conversations** — Containers for message history
+- **tasks** — One per user request. Tracks goal, plan, working memory, and status
+- **messages** — Full message history linked to both conversation and task
+- **local_data** — Long-term memory: facts, preferences, and context per device
+- **background** — Job queue for post-completion processing
+- **keywords** — Extracted from tasks for searchability
+
+### Working Memory
+
+The Orchestrator maintains task state across its entire execution:
+
+- `set_plan` / `set_current_step` — Track where it is in the work
+- `set_state` / `get_state` — Key-value store for counters, targets, accumulated results
+- `checkpoint` — Persist progress and prune context for long tasks
+- `mark_complete` — Explicit completion signal before the final response
+
+Working memory is persisted to the database on every mutation. Context pruning rebuilds the prompt from task state rather than replaying history, so the Orchestrator can work through arbitrarily long tasks without degrading.
+
+## Project Structure
+
+```
+artificer/
+├── hardware.json          # GPU configuration
+├── crates/
+│   ├── engine/            # Server
+│   │   └── src/
+│   │       ├── api/       # HTTP handlers, SSE streaming, middleware
+│   │       ├── orchestrator/  # Main loop, task state, tools, system prompt
+│   │       ├── specialist/    # Registry and execution for all specialists
+│   │       ├── background/    # Background job workers
+│   │       └── pool.rs        # GPU pool and acquisition
+│   ├── envoy/             # Client
+│   │   └── src/
+│   │       ├── client.rs  # HTTP communication with engine
+│   │       ├── tools.rs   # Client-side tool execution (file operations)
+│   │       └── ui.rs      # Terminal interface
+│   └── shared/            # Types shared between engine and envoy
+│       └── src/
+│           ├── db/        # Database layer (all persistence logic)
+│           └── tools/     # Tool definitions and toolbelts
 ```
 
-### Running
+## Hardware
 
-**Start the engine:**
+Developed and tested on:
+- **NVIDIA Tesla P40** (24GB VRAM) — Primary/interactive GPU, running `qwen2.5:32b-instruct-q4_K_M` via Ollama on port 11435
+- **NVIDIA RTX 3070** (8GB VRAM) — Background GPU, running `qwen3:8b` via Ollama on port 11434
+
+The P40 keeps models loaded for interactive response times. The 3070 unloads immediately after background tasks to minimize idle power draw.
+
+Artificer is designed to scale horizontally with hardware. Adding a second P40 to `hardware.json` enables two concurrent Orchestrator sessions automatically.
+
+## Prerequisites
+
+- Rust (stable)
+- Ollama with models pulled for each GPU
+- Tailscale (for remote access)
+- NVIDIA drivers and CUDA (for GPU power management)
+
+## Running
+
 ```bash
+# Start the engine
 cd crates/engine
 cargo run
-```
 
-**Start an envoy client:**
-```bash
+# Start an envoy client (on any machine with access)
 cd crates/envoy
 cargo run
 ```
 
-The envoy will automatically register with the engine on first run.
+For development with hot reloading:
 
-## Architecture
-
-### Components
-
-- **Engine**: Server component running on GPU machine
-  - Orchestrator: Manages task execution and delegation
-  - Specialists: Domain-specific agents (FileSmith, WebResearcher, Archivist)
-  - Background Worker: Processes async jobs (title generation, etc.)
-  - GPU Pool: Manages GPU assignment for concurrent tasks
-
-- **Envoy**: Lightweight client for interacting with engine
-  - Runs on any machine
-  - Executes client-side tools (file operations)
-  - Communicates with engine over HTTP
-
-### How It Works
-
-1. **User Request** → Envoy sends to engine
-2. **Orchestrator** → Claims GPU, creates task, makes plan
-3. **Specialists** → Orchestrator delegates work to specialists
-4. **Tool Execution** → Specialists use tools to accomplish work
-5. **Response** → Results streamed back to user via SSE
-
-### GPU Management
-
-Hardware is declared in `hardware.json`:
-
-- **Interactive GPUs**: Run user-facing tasks (Orchestrator + Specialists)
-- **Background GPUs**: Run async jobs (title generation, etc.)
-
-The system scales horizontally — adding GPUs enables more concurrent tasks.
-
-### Database
-
-SQLite with WAL mode. All state persists locally:
-
-- Conversations & messages
-- Tasks & sub-tasks
-- Device registry
-- Background job queue
+```bash
+cargo watch -x run
+```
 
 ## Configuration
 
-### hardware.json
+The engine reads `hardware.json` from the workspace root. The envoy reads a config file specifying the engine URL and device key.
 
-```json
-{
-  "gpus": [
-    {
-      "id": "gpu_name",
-      "url": "http://localhost:11434",
-      "model": "model_name",
-      "role": "interactive | background"
-    }
-  ]
-}
-```
+Device authentication is handled at the engine level. Each Envoy registers with a unique device key, scoping its memory and conversations to that device.
 
-### Environment Variables
+## Design Principles
 
-- `ENVOY_URL`: Envoy tool server URL (default: `http://localhost:8081`)
-- `BRAVE_API_KEY`: For web search functionality
+**Tasks over conversations.** The fundamental unit is a task with a goal and a completion state, not an exchange of messages. Conversations are just containers.
 
-## Development
+**Delegation over monolith.** The Orchestrator reasons about what to do. Specialists reason about how to do it. Neither does the other's job.
 
-### Project Structure
+**Hardware drives architecture.** GPU assignment, model selection, and power management are explicit decisions made in configuration, not hidden inside code.
 
-```
-artificer/
-├── crates/
-│   ├── engine/          # Server
-│   │   └── src/
-│   │       ├── agent/       # Agent system
-│   │       ├── api/         # HTTP handlers
-│   │       ├── background/  # Background worker
-│   │       └── pool/        # GPU & agent pools
-│   ├── envoy/           # Client
-│   └── shared/          # Shared code
-│       └── src/
-│           ├── db/      # Database layer
-│           └── tools/   # Tool definitions
-├── hardware.json        # GPU configuration
-└── README.md
-```
+**Persistence by default.** Working memory is written to the database on every mutation. A crash mid-task loses nothing except the current model call.
 
-### Running Tests
-
-```bash
-cargo test --workspace
-```
-
-### Hot Reload Development
-
-Using `cargo-watch` via `just`:
-
-```bash
-just dev-engine   # Engine with hot reload
-just dev-envoy    # Envoy with hot reload
-```
-
-## API
-
-See [API Documentation](crates/engine/src/api/API.md) for full endpoint details.
-
-Key endpoints:
-- `POST /chat` — Send messages (SSE streaming)
-- `POST /devices/register` — Register new device
-- `GET /status` — System status
-- `GET /background/status` — Background job queue status
-
-## Troubleshooting
-
-**"All GPUs are currently busy"**
-All interactive GPUs are in use. Wait for current tasks to complete, or add more GPUs to `hardware.json`.
-
-**"Tool requires client execution but no envoy URL configured"**
-Start an envoy client or set the `ENVOY_URL` environment variable.
-
-**"Database error"**
-Check file permissions on `memory.db`. Delete it and restart to recreate from scratch.
-
-## License
-
-[Your chosen license]
+**Local first.** All data stays on your hardware. External network access only happens when a specialist explicitly makes a web request.
