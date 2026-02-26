@@ -1,4 +1,3 @@
-// crates/shared/src/toolbelts/archivist.rs
 use anyhow::Result;
 use crate::{register_toolbelt, ToolLocation, db};
 

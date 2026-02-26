@@ -9,19 +9,21 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
+use crate::agent::{Agent, AgentContext, implementations::AgentType, AgentExecution};
 use crate::api::events::{EventSender, SseEvent};
 use crate::api::types::{
     ChatRequest, ChatResponse, ErrorResponse,
     RegisterDeviceRequest, RegisterDeviceResponse,
 };
-use crate::orchestrator::Orchestrator;
-use crate::pool::GpuPool;
+use crate::pool::AgentPool;
+use crate::pool::gpu_pool::GpuPool;
 
 /// Shared application state injected into every handler via Extension.
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
-    pub pool: Arc<GpuPool>,
+    pub gpu_pool: Arc<GpuPool>,
+    pub agent_pool: Arc<AgentPool>,
 }
 
 /// POST /chat
@@ -50,36 +52,8 @@ pub async fn handle_chat(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    // --- Load message count for this conversation (for ordered inserts) ---
-    let message_count = match state.db.get_message_count(conversation_id) {
-        Ok(n) => n,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let mut message_count = message_count;
-
-    // --- Load conversation history ---
-    let history = match state.db.get_messages(conversation_id) {
-        Ok(msgs) => msgs,
-        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    // --- Persist the user message ---
-    // We do this before acquiring the GPU so the message is always recorded,
-    // even if GPU acquisition fails.
-    let is_first_message = history.is_empty();
-    if let Err(e) = state.db.add_message(
-        conversation_id,
-        None, // task_id not known yet — the Orchestrator creates it
-        "user",
-        Some(&req.message),
-        None,
-        &mut message_count,
-    ) {
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
-    }
-
     // --- Acquire GPU ---
-    let gpu = match state.pool.acquire_interactive() {
+    let gpu = match state.gpu_pool.acquire_interactive() {
         Some(gpu) => gpu,
         None => return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -88,84 +62,43 @@ pub async fn handle_chat(
     };
     let gpu_id = gpu.id.clone();
 
-    // --- Stream or non-stream path ---
-    if req.stream.unwrap_or(true) {
-        // Set up SSE channel
-        let (tx, rx) = mpsc::channel::<SseEvent>(32);
-        let events = EventSender::new(tx);
+    // Set up SSE channel
+    let (tx, rx) = mpsc::channel::<SseEvent>(32);
+    let events = EventSender::new(tx);
 
-        let db = state.db.clone();
-        let pool = state.pool.clone();
-        let goal = req.message.clone();
+    let db = state.db.clone();
+    let gpu_pool = state.gpu_pool.clone();
+    let agent_pool = state.agent_pool.clone();
+    let goal = req.message.clone();
 
-        tokio::spawn(async move {
-            let orchestrator = Orchestrator::new(
-                db.clone(),
-                gpu,
-                device_id,
-                Some(events.clone()),
-            );
-
-            let result = orchestrator.run(
-                goal.clone(),
-                conversation_id,
-                history,
-                message_count,
-            ).await;
-
-            // Release GPU before queuing anything else
-            pool.release(&gpu_id);
-
-            // Queue background jobs if this was the first message
-            // (title generation only makes sense once there's content)
-            if is_first_message {
-                let _ = db.queue_conversation_jobs(device_id, conversation_id, &goal);
-            }
-
-            if let Err(e) = result {
-                events.error(&e.to_string());
-            }
-
-            events.done(conversation_id);
-        });
-
-        let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
-        Sse::new(stream).into_response()
-
-    } else {
-        // Non-streaming: run synchronously, return JSON
-        let orchestrator = Orchestrator::new(
-            state.db.clone(),
-            gpu,
+    tokio::spawn(async move {
+        let context = AgentContext {
             device_id,
-            None,
-        );
-
-        let result = orchestrator.run(
-            req.message.clone(),
             conversation_id,
-            history,
-            message_count,
-        ).await;
+            gpu,
+            db
+        };
+        let orchestrator = AgentExecution::new(agent: agent_pool.get("orchestrator").unwrap(), context, &goal);
+        let result = orchestrator.execute().await;
 
-        state.pool.release(&gpu_id);
+        // Release GPU before queuing anything else
+        gpu_pool.release(&gpu_id);
 
+        // Queue background jobs if this was the first message
+        // (title generation only makes sense once there's content)
         if is_first_message {
-            let _ = state.db.queue_conversation_jobs(
-                device_id,
-                conversation_id,
-                &req.message,
-            );
+            let _ = db.queue_conversation_jobs(device_id, conversation_id, &goal);
         }
 
-        match result {
-            Ok(content) => Json(ChatResponse {
-                conversation_id,
-                content,
-            }).into_response(),
-            Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        if let Err(e) = result {
+            events.error(&e.to_string());
         }
-    }
+
+        events.done(conversation_id);
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| event.to_sse());
+    Sse::new(stream).into_response()
 }
 
 /// POST /devices/register
@@ -283,7 +216,7 @@ pub async fn handle_status(
 // HELPERS
 // ============================================================================
 
-fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<i64> {
+fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<u64> {
     db.query_row_optional(
         "SELECT id FROM devices WHERE device_key = ?1 AND active = 1",
         rusqlite::params![device_key],
@@ -294,7 +227,7 @@ fn authenticate_device(db: &Db, device_key: &str) -> anyhow::Result<i64> {
 
 fn resolve_conversation(
     db: &Db,
-    device_id: i64,
+    device_id: u64,
     existing_id: Option<u64>,
 ) -> anyhow::Result<u64> {
     match existing_id {

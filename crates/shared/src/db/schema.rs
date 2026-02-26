@@ -40,25 +40,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-
-            -- The original user request, verbatim
             goal TEXT NOT NULL,
-
-            -- Generated after completion via background job
             title TEXT,
             summary TEXT,
-
-            -- The plan the Orchestrator created (JSON array of steps)
             plan TEXT,
-
-            -- Serialized working memory at last checkpoint (JSON)
             working_memory TEXT,
-
-            -- Completion state
             status TEXT NOT NULL DEFAULT 'in_progress'
                 CHECK(status IN ('in_progress', 'completed', 'failed', 'abandoned')),
-
-            -- Timestamps
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             completed_at INTEGER,
@@ -111,7 +99,6 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             conversation_id INTEGER NOT NULL,
-            -- Link to specialist if this message was part of one
             task_id INTEGER,
             role TEXT NOT NULL,
             message TEXT,
