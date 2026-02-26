@@ -1,5 +1,3 @@
-pub mod title_generation;
-
 use std::sync::Arc;
 use anyhow::Result;
 use tokio::time::{sleep, Duration};
@@ -208,12 +206,46 @@ impl Worker {
 
         let result = match job.method.as_str() {
             "title_generation" => {
-                title_generation::execute(
-                    self.agent_pool.db(),
-                    &gpu,
+                let agent = match self.agent_pool.get("TitleGenerator") {
+                    Some(a) => a,
+                    None => {
+                        self.gpu_pool.release(&gpu_id);
+                        return Err(anyhow::anyhow!("TitleGenerator agent not found"));
+                    }
+                };
+
+                let conversation_id = job.arguments["conversation_id"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("Missing conversation_id in job args"))?;
+                let user_message = job.arguments["user_message"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing user_message in job args"))?
+                    .to_string();
+
+                let context = crate::agent::AgentContext {
+                    device_id: job.device_id.unwrap_or(0) as u64,
+                    device_key: String::new(),
+                    conversation_id,
+                    parent_task_id: None,
+                    gpu: gpu.clone(),
+                    events: None,
+                };
+
+                let execution = crate::agent::AgentExecution::new(
+                    agent,
+                    context,
+                    &user_message,
                     &self.agent_pool,
-                    &job.arguments,
-                ).await
+                );
+
+                let response = execution.execute(self.agent_pool.clone()).await?;
+
+                let device_id = job.device_id.unwrap_or(0);
+                self.agent_pool
+                    .db()
+                    .set_conversation_title(conversation_id, device_id, &response.content)?;
+
+                Ok(format!("Set title: {}", response.content))
             }
             other => Err(anyhow::anyhow!("Unknown job method: {}", other)),
         };

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use crate::agent::AgentContext;
+use crate::pool::GpuHandle;
 use artificer_shared::db::Db;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,9 +28,13 @@ pub struct Task {
     pub current_step: Option<TaskStep>,
     pub progress: TaskStatus,
 
-    /// Non-serialized database reference for persistence operations.
+    /// Non-serialized fields for execution context
     #[serde(skip)]
     pub(crate) db: Option<Arc<Db>>,
+    #[serde(skip)]
+    conversation_id: u64,
+    #[serde(skip)]
+    gpu: Option<GpuHandle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +67,19 @@ impl Task {
             current_step: None,
             progress: TaskStatus::NotStarted,
             db: Some(db),
+            conversation_id: context.conversation_id,
+            gpu: Some(context.gpu.clone()),
         }
+    }
+
+    /// Get the conversation this task belongs to
+    pub fn conversation_id(&self) -> u64 {
+        self.conversation_id
+    }
+
+    /// Get the GPU handle for this task
+    pub fn gpu(&self) -> &GpuHandle {
+        self.gpu.as_ref().expect("GPU not set in task")
     }
 
     /// Generate a compact summary of current task state for the system prompt.

@@ -131,7 +131,7 @@ pub async fn handle_chat(
     let agent_pool = state.agent_pool.clone();
 
     tokio::spawn(async move {
-        let _context = AgentContext {
+        let context = AgentContext {
             device_id,
             device_key: req.device_key.clone(),
             conversation_id,
@@ -140,10 +140,28 @@ pub async fn handle_chat(
             events: Some(events.clone()),
         };
 
-        // TODO (Request 5): Hand off to orchestrator via agent_pool
-        // let orchestrator = agent_pool.get("Orchestrator").unwrap();
-        // let execution = AgentExecution::new(orchestrator, context, &req.message);
-        // let _ = execution.execute().await;
+        // Get orchestrator and execute
+        match agent_pool.get("Orchestrator") {
+            Some(orchestrator) => {
+                let execution = crate::agent::AgentExecution::new(
+                    orchestrator,
+                    context,
+                    &req.message,
+                    &agent_pool,
+                );
+                match execution.execute(agent_pool.clone()).await {
+                    Ok(_) => {
+                        // Success — response already streamed via events
+                    }
+                    Err(e) => {
+                        events.error(&e.to_string());
+                    }
+                }
+            }
+            None => {
+                events.error("Orchestrator agent not found");
+            }
+        }
 
         gpu_pool.release(&gpu_id);
 

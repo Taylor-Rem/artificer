@@ -8,6 +8,7 @@ define_agents! {
         system_prompt: include_str!("../prompts/orchestrator.txt"),
         toolbelts: [],
         task_tools: true,
+        delegation_tools: true,
     },
 
     FileSmith: AgentRoles::Specialist => {
