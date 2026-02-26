@@ -1,7 +1,6 @@
 mod schema;
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::cell::RefCell;
 use rusqlite::Connection;
 use anyhow::Result;
 use serde_json::Value;
@@ -251,15 +250,28 @@ impl Db {
 
 impl Db {
     /// Create a new task record. Returns the task_id.
-    pub fn create_task(&self, device_id: u64, conversation_id: u64, goal: &str) -> Result<u64> {
+    pub fn create_task(
+        &self,
+        device_id: u64,
+        conversation_id: u64,
+        parent_task_id: Option<u64>,
+        goal: &str,
+    ) -> Result<u64> {
         let now = now();
         let conn = self.lock()?;
 
         conn.execute(
             "INSERT INTO tasks
-             (device_id, conversation_id, goal, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'not_started', ?4, ?5)",
-            rusqlite::params![device_id, conversation_id as u64, goal, now, now],
+             (device_id, conversation_id, parent_task_id, goal, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'in_progress', ?5, ?6)",
+            rusqlite::params![
+                device_id,
+                conversation_id as i64,
+                parent_task_id.map(|id| id as i64),
+                goal,
+                now,
+                now
+            ],
         )?;
 
         Ok(conn.last_insert_rowid() as u64)
@@ -301,10 +313,19 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Get goal and plan for a task by ID. Used for parent task queries.
+    pub fn get_task_info(&self, task_id: u64) -> Result<Option<(String, Option<String>)>> {
+        self.query_row_optional(
+            "SELECT goal, plan FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    }
 }
 
 // ============================================================================
-// TITLES (formerly services/title.rs)
+// TITLES
 // ============================================================================
 
 impl Db {
@@ -373,63 +394,45 @@ impl Db {
 }
 
 // ============================================================================
-// MEMORY
-// ============================================================================
-
-impl Db {
-    /// Load all long-term memory for a device, ordered by type and confidence.
-    pub fn get_memory(&self, device_id: i64) -> Result<String> {
-        self.query(
-            "SELECT key, value, memory_type, confidence
-             FROM local_data
-             WHERE device_id = ?1
-             ORDER BY
-               CASE memory_type
-                 WHEN 'fact' THEN 1
-                 WHEN 'context' THEN 2
-                 WHEN 'preference' THEN 3
-               END,
-               confidence DESC,
-               updated_at DESC",
-            rusqlite::params![device_id],
-        )
-    }
-
-    /// Upsert a memory entry for a device.
-    pub fn upsert_memory(
-        &self,
-        device_id: i64,
-        task_id: Option<i64>,
-        key: &str,
-        value: &str,
-        memory_type: &str,
-        confidence: f64,
-    ) -> Result<()> {
-        let now = now();
-        self.execute(
-            "INSERT INTO local_data
-             (device_id, task_id, key, value, memory_type, confidence, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(device_id, key) DO UPDATE SET
-               value = excluded.value,
-               memory_type = excluded.memory_type,
-               confidence = excluded.confidence,
-               task_id = excluded.task_id,
-               updated_at = excluded.updated_at",
-            rusqlite::params![
-                device_id, task_id, key, value,
-                memory_type, confidence, now, now
-            ],
-        )?;
-        Ok(())
-    }
-}
-
-// ============================================================================
 // BACKGROUND JOBS
 // ============================================================================
 
 impl Db {
+    /// Queue a title generation job for a conversation.
+    pub fn queue_title_generation(
+        &self,
+        device_id: i64,
+        conversation_id: u64,
+        first_message: &str,
+    ) -> Result<u64> {
+        self.create_job(
+            device_id,
+            "title_generation",
+            &serde_json::json!({
+                "conversation_id": conversation_id,
+                "user_message": first_message,
+            }),
+            1,
+        )
+    }
+
+    /// Clean up old completed/failed background jobs older than 7 days.
+    pub fn cleanup_old_background_jobs(&self) -> Result<usize> {
+        let seven_days_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64 - (7 * 24 * 60 * 60);
+
+        let conn = self.lock()?;
+        let count = conn.execute(
+            "DELETE FROM background
+             WHERE status IN ('completed', 'failed')
+             AND created_at < ?1",
+            rusqlite::params![seven_days_ago],
+        )?;
+
+        Ok(count)
+    }
+
     pub fn create_job(
         &self,
         device_id: i64,
@@ -455,163 +458,6 @@ impl Db {
 
         Ok(conn.last_insert_rowid() as u64)
     }
-
-    /// Queue all post-completion jobs for a conversation:
-    /// title generation, summarization, memory extraction.
-    pub fn queue_conversation_jobs(
-        &self,
-        device_id: i64,
-        conversation_id: u64,
-        first_user_message: &str,
-    ) -> Result<()> {
-        self.create_job(
-            device_id,
-            "title_generation",
-            &serde_json::json!({
-                "conversation_id": conversation_id,
-                "user_message": first_user_message,
-            }),
-            1, // higher priority than summarization
-        )?;
-
-        self.create_job(
-            device_id,
-            "summarization",
-            &serde_json::json!({ "conversation_id": conversation_id }),
-            0,
-        )?;
-
-        self.create_job(
-            device_id,
-            "memory_extraction",
-            &serde_json::json!({ "conversation_id": conversation_id }),
-            0,
-        )?;
-
-        Ok(())
-    }
-
-    /// Queue all post-completion jobs for a task:
-    /// title generation, summarization, memory extraction.
-    pub fn queue_task_jobs(
-        &self,
-        device_id: i64,
-        task_id: i64,
-    ) -> Result<()> {
-        self.create_job(
-            device_id,
-            "task_title_generation",
-            &serde_json::json!({ "task_id": task_id }),
-            1,
-        )?;
-
-        self.create_job(
-            device_id,
-            "task_summarization",
-            &serde_json::json!({ "task_id": task_id }),
-            0,
-        )?;
-
-        self.create_job(
-            device_id,
-            "task_memory_extraction",
-            &serde_json::json!({ "task_id": task_id }),
-            0,
-        )?;
-
-        Ok(())
-    }
-}
-
-// ============================================================================
-// KEYWORDS
-// ============================================================================
-
-impl Db {
-    /// Insert keywords and link them to a conversation.
-    pub fn attach_conversation_keywords(
-        &self,
-        conversation_id: u64,
-        keywords: &[String],
-    ) -> Result<()> {
-        let conn = self.lock()?;
-        for keyword in keywords {
-            let kw = keyword.trim().to_lowercase();
-            if kw.is_empty() { continue; }
-
-            conn.execute(
-                "INSERT OR IGNORE INTO keywords (keyword) VALUES (?1)",
-                rusqlite::params![kw],
-            )?;
-
-            let keyword_id: i64 = conn.query_row(
-                "SELECT id FROM keywords WHERE keyword = ?1",
-                rusqlite::params![kw],
-                |row| row.get(0),
-            )?;
-
-            conn.execute(
-                "INSERT OR IGNORE INTO conversation_keywords
-                 (conversation_id, keyword_id) VALUES (?1, ?2)",
-                rusqlite::params![conversation_id as i64, keyword_id],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Insert keywords and link them to a task.
-    pub fn attach_task_keywords(
-        &self,
-        task_id: i64,
-        keywords: &[String],
-    ) -> Result<()> {
-        let conn = self.lock()?;
-        for keyword in keywords {
-            let kw = keyword.trim().to_lowercase();
-            if kw.is_empty() { continue; }
-
-            conn.execute(
-                "INSERT OR IGNORE INTO keywords (keyword) VALUES (?1)",
-                rusqlite::params![kw],
-            )?;
-
-            let keyword_id: i64 = conn.query_row(
-                "SELECT id FROM keywords WHERE keyword = ?1",
-                rusqlite::params![kw],
-                |row| row.get(0),
-            )?;
-
-            conn.execute(
-                "INSERT OR IGNORE INTO task_keywords
-                 (task_id, keyword_id) VALUES (?1, ?2)",
-                rusqlite::params![task_id, keyword_id],
-            )?;
-        }
-        Ok(())
-    }
-}
-
-// ============================================================================
-// DEVICE CONTEXT (for scoped views)
-// ============================================================================
-
-thread_local! {
-    static CURRENT_DEVICE_ID: RefCell<Option<i64>> = RefCell::new(None);
-}
-
-pub fn set_device_context(db: &Db, device_id: i64) -> Result<()> {
-    CURRENT_DEVICE_ID.with(|id| {
-        *id.borrow_mut() = Some(device_id);
-    });
-    db.execute(
-        "INSERT OR REPLACE INTO runtime_context (key, value) VALUES ('current_device_id', ?1)",
-        rusqlite::params![device_id.to_string()],
-    )?;
-    Ok(())
-}
-
-pub fn get_device_context() -> Option<i64> {
-    CURRENT_DEVICE_ID.with(|id| *id.borrow())
 }
 
 // ============================================================================

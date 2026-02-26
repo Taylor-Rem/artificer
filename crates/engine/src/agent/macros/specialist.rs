@@ -4,8 +4,9 @@ macro_rules! define_agents {
         $(
             $name:ident: $role:expr => {
                 description: $desc:literal,
+                execution_mode: $exec_mode:expr,
                 system_prompt: $prompt:expr,
-                tools: $tools:expr,
+                toolbelts: [$($toolbelt:literal),* $(,)?],
                 $(task_tools: $has_task_tools:expr,)?
             }
         ),* $(,)?
@@ -16,34 +17,40 @@ macro_rules! define_agents {
         }
 
         impl AgentType {
-            pub fn build(self, client: Client) -> Agent {
+            pub fn all() -> &'static [AgentType] {
+                &[$(AgentType::$name),*]
+            }
+
+            pub fn build(self) -> $crate::agent::Agent {
                 match self {
                     $(
                         AgentType::$name => {
-                            let mut tools = $tools.unwrap_or_default();
+                            // Collect tools from all specified toolbelts
+                            let mut tools = vec![];
+                            $(
+                                let toolbelt_tools = artificer_shared::get_tools_for(&[$toolbelt]);
+                                tools.extend(toolbelt_tools);
+                            )*
 
-                            // Conditionally merge task tools
+                            // Conditionally add task management tools
                             $(
                                 if $has_task_tools {
-                                    // Import from task module
                                     use crate::agent::schema::task::TASK_TOOLS;
-
-                                    let task_tools: Vec<Tool> = TASK_TOOLS
+                                    let task_tools: Vec<artificer_shared::Tool> = TASK_TOOLS
                                         .iter()
                                         .map(|schema| schema.to_tool())
                                         .collect();
-
                                     tools.extend(task_tools);
                                 }
                             )?
 
-                            Agent {
+                            $crate::agent::Agent {
                                 name: stringify!($name),
                                 description: $desc,
                                 role: $role,
+                                execution_mode: $exec_mode,
                                 system_prompt: $prompt,
                                 tools,
-                                client,
                             }
                         }
                     ),*

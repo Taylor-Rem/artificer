@@ -1,1 +1,1 @@
-mod specialist;
+pub mod specialist;

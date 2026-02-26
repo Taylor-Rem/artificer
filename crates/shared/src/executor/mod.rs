@@ -1,39 +1,66 @@
 use anyhow::Result;
 use serde_json::Value;
+use crate::tools::get_tool_schema;
+use crate::schemas::ToolLocation;
 
-/// Determines how a tool should be executed at runtime
-pub enum ToolExecutor {
-    /// Execute tool directly in the current process
-    Local,
-    /// Execute tool via HTTP request to a remote envoy client
-    Remote {
-        base_url: String,
-        device_id: i64,
-        device_key: String,
-    },
+/// Executes tools either locally or remotely based on their location.
+pub struct ToolExecutor {
+    /// Base URL for remote envoy client (e.g., "http://localhost:8081").
+    /// None means local-only mode — Client tools will error.
+    envoy_url: Option<String>,
+    /// Cached HTTP client for remote tool calls.
+    client: reqwest::Client,
 }
 
 impl ToolExecutor {
-    /// Create a local executor (runs tools in current process)
-    pub fn local() -> Self {
-        Self::Local
+    pub fn new(envoy_url: Option<String>) -> Self {
+        Self {
+            envoy_url,
+            client: reqwest::Client::new(),
+        }
     }
 
-    /// Create a remote executor (sends tool calls to envoy via HTTP)
-    pub fn remote(base_url: String, device_id: i64, device_key: String,) -> Self {
-        Self::Remote { base_url, device_id, device_key}
+    /// Returns true if an envoy URL is configured.
+    pub fn has_envoy(&self) -> bool {
+        self.envoy_url.is_some()
     }
 
-    /// Execute a tool with the configured strategy
-    pub async fn execute(&self, tool_name: &str, args: &Value) -> Result<String> {
-        match self {
-            ToolExecutor::Local => {
-                // Direct local execution
+    /// Returns the configured envoy URL, if any.
+    pub fn envoy_url(&self) -> Option<&str> {
+        self.envoy_url.as_deref()
+    }
+
+    /// Execute a Server-location tool locally (synchronous).
+    pub fn execute_server(&self, tool_name: &str, args: &Value) -> Result<String> {
+        crate::tools::use_tool(tool_name, args)
+    }
+
+    /// Execute a tool with the configured strategy.
+    pub async fn execute(
+        &self,
+        tool_name: &str,
+        args: &Value,
+        device_id: i64,
+        device_key: &str,
+    ) -> Result<String> {
+        let schema = get_tool_schema(tool_name)?;
+
+        match schema.location {
+            ToolLocation::Server => {
                 crate::tools::use_tool(tool_name, args)
             }
-            ToolExecutor::Remote { base_url, device_id, device_key } => {
-                // Remote execution via HTTP
-                self.execute_remote(base_url, *device_id, device_key, tool_name, args).await
+            ToolLocation::Client => {
+                match &self.envoy_url {
+                    Some(url) => {
+                        self.execute_remote(url, device_id, device_key, tool_name, args).await
+                    }
+                    None => {
+                        Err(anyhow::anyhow!(
+                            "Tool '{}' requires client execution but no envoy URL is configured",
+                            tool_name
+                        ))
+                    }
+                }
             }
         }
     }
@@ -44,9 +71,8 @@ impl ToolExecutor {
         device_id: i64,
         device_key: &str,
         tool_name: &str,
-        args: &Value
+        args: &Value,
     ) -> Result<String> {
-        let client = reqwest::Client::new();
         let url = format!("{}/shared/execute", base_url);
 
         let request_body = serde_json::json!({
@@ -56,7 +82,7 @@ impl ToolExecutor {
             "arguments": args,
         });
 
-        let response = client
+        let response = self.client
             .post(&url)
             .json(&request_body)
             .send()

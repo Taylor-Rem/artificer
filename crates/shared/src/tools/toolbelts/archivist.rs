@@ -11,11 +11,11 @@ impl Default for Archivist {
 
 register_toolbelt! {
     Archivist {
-        description: "Tool for managing chat history, user memory, and preferences. All queries are automatically scoped to the current device.",
+        description: "Tool for managing chat history. All queries are automatically scoped to the current device.",
         location: ToolLocation::Server,
         tools: {
             "query_db" => query_db {
-                description: "Runs a SQL query against device-scoped views. Use device_* views for device data. Global tables (tasks, keywords) can be queried directly.",
+                description: "Runs a SQL query against the database.",
                 params: ["query": "string" => "SQL query string", "params": "array" => "Ordered parameter values for ?1, ?2, etc."]
             },
             "list_tables" => list_tables {
@@ -23,16 +23,12 @@ register_toolbelt! {
                 params: []
             },
             "list_conversations" => list_conversations {
-                description: "Lists all conversations for the current device with their IDs, titles, and keywords",
+                description: "Lists all conversations for the current device with their IDs and titles",
                 params: []
             },
             "get_conversation" => get_conversation {
                 description: "Retrieves a conversation and all messages by title for the current device",
                 params: ["title": "string" => "Title of the conversation to retrieve"]
-            },
-            "search_by_keyword" => search_by_keyword {
-                description: "Search conversations by keyword for the current device",
-                params: ["keyword": "string" => "Keyword to search for (case-insensitive)"]
             },
         }
     }
@@ -45,7 +41,6 @@ impl Archivist {
             return Ok("Error: query cannot be empty".to_string());
         }
 
-        // Device context should already be set by specialist execution
         let params_json = args["params"].as_array()
             .map(|arr| arr.clone())
             .unwrap_or_default();
@@ -66,8 +61,8 @@ impl Archivist {
 
     fn list_conversations(&self, _args: &serde_json::Value) -> Result<String> {
         db::get().query(
-            "SELECT id, title, keywords, created, last_accessed
-             FROM device_conversations_with_keywords
+            "SELECT id, title, created, last_accessed
+             FROM conversations
              ORDER BY last_accessed DESC",
             rusqlite::params![],
         )
@@ -80,7 +75,7 @@ impl Archivist {
         }
 
         let conv_result = db::get().query(
-            "SELECT id, title FROM device_conversations WHERE title = ?1",
+            "SELECT id, title FROM conversations WHERE title = ?1",
             rusqlite::params![title],
         )?;
 
@@ -95,29 +90,10 @@ impl Archivist {
 
         let mut output = String::new();
         output.push_str(&format!("title: {}\n", conv_title));
-
-        // Get keywords
-        let keywords_result = db::get().query(
-            "SELECT k.keyword
-             FROM device_conversation_keywords ck
-             JOIN keywords k ON ck.keyword_id = k.id
-             WHERE ck.conversation_id = ?1",
-            rusqlite::params![conv_id],
-        )?;
-
-        let keywords: Vec<serde_json::Value> = serde_json::from_str(&keywords_result)?;
-        if !keywords.is_empty() {
-            let keyword_list: Vec<&str> = keywords.iter()
-                .filter_map(|kw| kw["keyword"].as_str())
-                .collect();
-            output.push_str(&format!("keywords: {}\n", keyword_list.join(", ")));
-        }
-
         output.push_str("\nmessages:\n");
 
-        // Get messages
         let messages_result = db::get().query(
-            "SELECT role, message FROM device_messages
+            "SELECT role, message FROM messages
              WHERE conversation_id = ?1
              ORDER BY m_order",
             rusqlite::params![conv_id],
@@ -132,22 +108,5 @@ impl Archivist {
         }
 
         Ok(output)
-    }
-
-    fn search_by_keyword(&self, args: &serde_json::Value) -> Result<String> {
-        let keyword = args["keyword"].as_str().unwrap_or("").to_lowercase();
-        if keyword.is_empty() {
-            return Ok("Error: keyword cannot be empty".to_string());
-        }
-
-        db::get().query(
-            "SELECT DISTINCT c.id, c.title, c.created, c.last_accessed
-             FROM device_conversations c
-             JOIN device_conversation_keywords ck ON c.id = ck.conversation_id
-             JOIN keywords k ON ck.keyword_id = k.id
-             WHERE k.keyword LIKE '%' || ?1 || '%'
-             ORDER BY c.last_accessed DESC",
-            rusqlite::params![keyword],
-        )
     }
 }
