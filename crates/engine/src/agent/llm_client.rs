@@ -31,13 +31,23 @@ impl<'a> LlmClient<'a> {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "LLM request failed ({}): {}",
-                status,
-                error_text
-            ));
+            "LLM request failed ({}): {}",
+            status,
+            error_text
+        ));
         }
 
         let llm_response: LlmResponse = response.json().await?;
+
+        // ✓ Validate response has content
+        if llm_response.message.content.is_none()
+            && llm_response.message.tool_calls.is_none()
+        {
+            return Err(anyhow::anyhow!(
+            "LLM returned empty response (no content and no tool_calls)"
+        ));
+        }
+
         Ok(llm_response)
     }
 
@@ -60,18 +70,23 @@ impl<'a> LlmClient<'a> {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "LLM streaming request failed ({}): {}",
-                status,
-                error_text
-            ));
+            "LLM streaming request failed ({}): {}",
+            status,
+            error_text
+        ));
         }
 
         let mut stream = response.bytes_stream();
         let mut accumulated_content = String::new();
         let mut tool_calls: Option<Vec<ToolCall>> = None;
         let mut buffer = Vec::new();
+        let mut done = false;  // ✓ Track done state at outer scope
 
         while let Some(chunk) = stream.next().await {
+            if done {
+                break;  // ✓ Exit stream consumption when done
+            }
+
             let bytes = chunk?;
             buffer.extend_from_slice(&bytes);
 
@@ -97,10 +112,18 @@ impl<'a> LlmClient<'a> {
                     }
 
                     if chunk.done {
-                        break;
+                        done = true;  // ✓ Set flag
+                        break;        // ✓ Break inner loop
                     }
                 }
             }
+        }
+
+        // ✓ Validate we got something back
+        if accumulated_content.is_empty() && tool_calls.is_none() {
+            return Err(anyhow::anyhow!(
+            "LLM returned empty response (no content and no tool_calls)"
+        ));
         }
 
         Ok(Message {

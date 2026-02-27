@@ -4,7 +4,6 @@ use futures_util::future::BoxFuture;
 use crate::agent::{Agent, AgentContext, AgentResponse, Task, ToolExecutionContext};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
-use crate::agent::mode_detection::{detect_specialist_mode, SpecialistMode};
 use crate::agent::schema::{AgentRoles, ExecutionMode};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
@@ -132,41 +131,8 @@ impl AgentExecution {
     }
 
     async fn execute_specialist(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
-        match detect_specialist_mode(&self.task.user_goal) {
-            SpecialistMode::ToolProxy => self.execute_tool_proxy(pool).await,
-            SpecialistMode::Agentic => self.execute_orchestrator(pool).await,
-        }
-    }
-
-    async fn execute_tool_proxy(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
-        let messages = vec![
-            Message {
-                role: "system".to_string(),
-                content: Some(format!(
-                    "{}\n\nTOOL PROXY MODE: execute the single appropriate tool and return its result.",
-                    self.agent.system_prompt
-                )),
-                tool_calls: None,
-            },
-            Message {
-                role: "user".to_string(),
-                content: Some(self.task.user_goal.clone()),
-                tool_calls: None,
-            },
-        ];
-
-        let llm_client = LlmClient::new(pool.client(), self.task.gpu());
-        let request = LlmRequest::new(self.task.gpu().model.clone(), messages)
-            .with_tools(self.agent.tools.clone());
-
-        let response = llm_client.call(request).await?;
-
-        if let Some(tool_calls) = response.message.tool_calls {
-            let results = self.execute_tools(&tool_calls, pool).await?;
-            Ok(AgentResponse::complete(results.join("\n\n")))
-        } else {
-            Err(anyhow::anyhow!("Tool proxy mode returned no tool calls"))
-        }
+        // Specialists always use agentic mode
+        self.execute_orchestrator(pool).await
     }
 
     async fn execute_onetime(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
@@ -218,10 +184,7 @@ impl AgentExecution {
     }
 
     fn build_system_prompt(&self) -> String {
-        let mut prompt = self.agent.system_prompt.to_string();
-        prompt.push_str("\n\n## CURRENT TASK STATE\n");
-        prompt.push_str(&self.task.state_summary());
-        prompt
+        self.agent.build_system_prompt(&self.task.state_summary())
     }
 
     fn update_system_prompt(&self, messages: &mut Vec<Message>) {
