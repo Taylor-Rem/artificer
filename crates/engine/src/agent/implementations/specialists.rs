@@ -5,7 +5,7 @@ define_agents! {
     Orchestrator: AgentRoles::Orchestrator => {
         description: "Primary orchestrator that coordinates tasks and manages workflow",
         execution_mode: ExecutionMode::Agentic,
-        system_prompt: include_str!("../prompts/orchestrator.txt"),
+        system_prompt: "",
         toolbelts: [],
         task_tools: true,
         delegation_tools: true,
