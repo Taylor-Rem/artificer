@@ -81,9 +81,12 @@ impl AgentExecution {
             tool_calls: None,
         });
 
+        // Force tool calls for specialists unless the orchestrator explicitly requested synthesis.
+        let force_tool = self.agent.role == AgentRoles::Specialist && !self.context.synthesize;
+
         loop {
             self.update_system_prompt(&mut messages);
-            let response = self.call_llm(&messages, pool).await?;
+            let response = self.call_llm(&messages, pool, force_tool).await?;
 
             // Clone tool_calls to avoid borrow checker issues across async boundaries
             if let Some(tool_calls) = response.tool_calls.clone() {
@@ -98,7 +101,7 @@ impl AgentExecution {
                 messages.push(Message {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
-                    tool_calls: Some(tool_calls),
+                    tool_calls: Some(tool_calls.clone()),
                 });
                 for result in tool_results.iter() {
                     messages.push(Message {
@@ -106,6 +109,17 @@ impl AgentExecution {
                         content: Some(result.clone()),
                         tool_calls: None,
                     });
+                }
+
+                // Accumulate non-task tool results so they can be returned verbatim
+                // when the specialist marks the task complete — no LLM re-packaging needed.
+                for (tool_call, result) in tool_calls.iter().zip(tool_results.iter()) {
+                    if !tool_call.function.name.starts_with("task::") {
+                        self.task.push_tool_result(
+                            tool_call.function.name.clone(),
+                            result.clone(),
+                        );
+                    }
                 }
 
                 if self.task.is_complete() {
@@ -122,6 +136,23 @@ impl AgentExecution {
             }
 
             return Err(anyhow::anyhow!("LLM returned empty response"));
+        }
+
+        // Explicit return value (task::return_result) takes first priority
+        if let Some(return_value) = self.task.return_value.take() {
+            self.persist_assistant_message(Some(&return_value), None)?;
+            return Ok(AgentResponse::complete(return_value));
+        }
+
+        // Accumulated tool results — return them verbatim, no LLM synthesis
+        if !self.task.tool_call_results.is_empty() {
+            let response = self.task.tool_call_results
+                .iter()
+                .map(|(name, result)| format!("[{}]\n{}", name, result))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            self.persist_assistant_message(Some(&response), None)?;
+            return Ok(AgentResponse::complete(response));
         }
 
         // Task was marked complete via tool — generate a final summary
@@ -149,7 +180,7 @@ impl AgentExecution {
             },
         ];
 
-        let response = self.call_llm(&messages, pool).await?;
+        let response = self.call_llm(&messages, pool, false).await?;
 
         if let Some(content) = response.content {
             self.task.mark_complete();
@@ -195,17 +226,32 @@ impl AgentExecution {
         }
     }
 
-    async fn call_llm(&self, messages: &[Message], pool: &Arc<AgentPool>) -> Result<Message> {
+    async fn call_llm(&self, messages: &[Message], pool: &Arc<AgentPool>, force_tool: bool) -> Result<Message> {
         let llm_client = LlmClient::new(pool.client(), self.task.gpu());
-        let request = LlmRequest::new(self.task.gpu().model.clone(), messages.to_vec())
+        let mut request = LlmRequest::new(self.task.gpu().model.clone(), messages.to_vec())
             .with_tools(self.agent.tools.clone());
 
-        if let Some(events) = &self.context.events {
+        if force_tool {
+            eprintln!("[DEBUG] call_llm: force_tool=true, sending tool_choice=required");
+            request = request.with_tool_choice(serde_json::json!("required"));
+        }
+
+        let result = if let Some(events) = &self.context.events {
             llm_client.call_streaming(request, events).await
         } else {
             let response = llm_client.call(request).await?;
             Ok(response.message)
+        };
+
+        if force_tool {
+            match &result {
+                Ok(msg) if msg.tool_calls.is_some() => eprintln!("[DEBUG] call_llm: model obeyed — returned tool_call"),
+                Ok(_) => eprintln!("[DEBUG] call_llm: model IGNORED tool_choice=required — returned text"),
+                Err(e) => eprintln!("[DEBUG] call_llm: error after force_tool: {}", e),
+            }
         }
+
+        result
     }
 
     async fn execute_tools(
@@ -240,7 +286,7 @@ impl AgentExecution {
             tool_calls: None,
         });
 
-        let response = self.call_llm(&final_messages, pool).await?;
+        let response = self.call_llm(&final_messages, pool, false).await?;
         response
             .content
             .ok_or_else(|| anyhow::anyhow!("No final response generated"))

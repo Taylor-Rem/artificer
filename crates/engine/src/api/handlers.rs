@@ -138,6 +138,7 @@ pub async fn handle_chat(
             parent_task_id: None,
             gpu,
             events: Some(events.clone()),
+            synthesize: false,
         };
 
         // Get orchestrator and execute

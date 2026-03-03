@@ -60,6 +60,16 @@ pub struct Task {
     /// Capped at MAX_NOTES (20). Lowest-importance notes evicted when cap is reached.
     pub notes: Vec<TaskNote>,
 
+    /// Value explicitly returned by the specialist via task::return_result.
+    /// When set, this bypasses LLM synthesis and is returned directly.
+    #[serde(skip)]
+    pub return_value: Option<String>,
+
+    /// Accumulates (tool_name, result) for every non-task tool the specialist calls.
+    /// Returned verbatim to the orchestrator when the task completes.
+    #[serde(skip)]
+    pub tool_call_results: Vec<(String, String)>,
+
     /// Non-serialized execution context
     #[serde(skip)]
     pub(crate) db: Option<Arc<Db>>,
@@ -95,6 +105,8 @@ impl Task {
             total_iterations: None,
             completed_iterations: 0,
             notes: Vec::new(),
+            return_value: None,
+            tool_call_results: Vec::new(),
             db: Some(db),
             conversation_id: context.conversation_id,
             gpu: Some(context.gpu.clone()),
@@ -214,6 +226,16 @@ impl Task {
             step.progress = TaskStatus::Completed;
         }
         let _ = self.persist_complete();
+    }
+
+    pub fn set_return_value(&mut self, value: String) {
+        self.return_value = Some(value);
+        self.mark_complete();
+    }
+
+    /// Called by the execution loop (not the LLM) after each non-task tool completes.
+    pub fn push_tool_result(&mut self, tool_name: String, result: String) {
+        self.tool_call_results.push((tool_name, result));
     }
 
     pub fn mark_failed(&mut self, _reason: Option<String>) {
@@ -571,6 +593,22 @@ pub static TASK_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
         location: ToolLocation::Server,
         parameters: vec![],
     },
+    ToolSchema {
+        name: "task::return_result",
+        description: "Return a result value to the orchestrator and mark the task complete. \
+                      Use this instead of a free-form text response for retrieval tasks (read, list, fetch, get). \
+                      The value is returned verbatim — the orchestrator receives exactly what you pass here.",
+        location: ToolLocation::Server,
+        parameters: vec![
+            ParameterSchema {
+                name: "value",
+                type_name: "string",
+                description: "The result to return. Pass the raw content (e.g. file contents, directory listing). \
+                              Do not paraphrase or synthesize — the orchestrator will handle that.",
+                required: true,
+            },
+        ],
+    },
 ]);
 
 // ============================================================================
@@ -721,6 +759,15 @@ pub fn handle_task_tool(task: &mut Task, tool_name: &str, args: &Value) -> Resul
                 Ok(None) => Ok("Parent task has no plan set yet".to_string()),
                 Err(e) => Ok(format!("Error: {}", e)),
             }
+        }
+
+        "task::return_result" => {
+            let value = args["value"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'value' parameter"))?
+                .to_string();
+            task.set_return_value(value);
+            Ok("Result stored. Task complete.".to_string())
         }
 
         _ => Err(anyhow::anyhow!("Unknown task tool: {}", tool_name)),

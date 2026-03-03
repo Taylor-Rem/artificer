@@ -1,6 +1,16 @@
 use once_cell::sync::Lazy;
 use artificer_shared::schemas::{ToolSchema, ParameterSchema, ToolLocation};
 
+fn synthesize_param() -> ParameterSchema {
+    ParameterSchema {
+        name: "synthesize",
+        type_name: "boolean",
+        description: "When true, the specialist may return a synthesized text response (analysis, summary, explanation). \
+                      When false (default), raw tool results are returned verbatim — use this for retrieval tasks.",
+        required: false,
+    }
+}
+
 pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
     ToolSchema {
         name: "delegate::file_smith",
@@ -13,6 +23,7 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 description: "What you need FileSmith to do",
                 required: true,
             },
+            synthesize_param(),
         ],
     },
     ToolSchema {
@@ -26,6 +37,7 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 description: "What you need WebResearcher to do",
                 required: true,
             },
+            synthesize_param(),
         ],
     },
     ToolSchema {
@@ -39,6 +51,7 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 description: "What you need Archivist to do",
                 required: true,
             },
+            synthesize_param(),
         ],
     },
 ]);

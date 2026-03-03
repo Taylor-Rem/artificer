@@ -229,6 +229,7 @@ impl Worker {
                     parent_task_id: None,
                     gpu: gpu.clone(),
                     events: None,
+                    synthesize: false,
                 };
 
                 let execution = crate::agent::AgentExecution::new(

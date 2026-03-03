@@ -8,4 +8,7 @@ pub struct AgentContext {
     pub parent_task_id: Option<u64>,
     pub gpu: GpuHandle,
     pub events: Option<EventSender>,
+    /// When true, the specialist may generate free-form text responses (synthesis).
+    /// When false (default), tool calls are forced and results are returned verbatim.
+    pub synthesize: bool,
 }

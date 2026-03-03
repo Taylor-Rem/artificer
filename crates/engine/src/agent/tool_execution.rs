@@ -92,6 +92,8 @@ impl<'a> ToolExecutionContext<'a> {
             .or_else(|| args["task"].as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing goal/request/task in delegation args"))?;
 
+        let synthesize = args["synthesize"].as_bool().unwrap_or(false);
+
         // Emit task switch event
         if let Some(events) = &self.context.events {
             events.task_switch(
@@ -107,6 +109,7 @@ impl<'a> ToolExecutionContext<'a> {
             parent_task_id: Some(self.task.id()),
             gpu: self.task.gpu().clone(),
             events: self.context.events.clone(),
+            synthesize,
         };
 
         // Look up specialist again for AgentExecution::new
