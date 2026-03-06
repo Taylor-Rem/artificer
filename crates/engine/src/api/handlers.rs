@@ -138,6 +138,7 @@ pub async fn handle_chat(
             parent_task_id: None,
             gpu,
             events: Some(events.clone()),
+            execution_type: crate::agent::ExecutionType::Agentic,
         };
 
         // Get orchestrator and execute

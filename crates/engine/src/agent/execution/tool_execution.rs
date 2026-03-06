@@ -100,6 +100,14 @@ impl<'a> ToolExecutionContext<'a> {
             );
         }
 
+        let execution_type = args["execution_type"]
+            .as_str()
+            .and_then(crate::agent::ExecutionType::from_str)
+            .unwrap_or_else(|| {
+                eprintln!("Missing or invalid execution_type, defaulting to Agentic");
+                crate::agent::ExecutionType::Agentic
+            });
+
         let specialist_context = crate::agent::AgentContext {
             device_id: self.context.device_id,
             device_key: self.context.device_key.clone(),
@@ -107,6 +115,7 @@ impl<'a> ToolExecutionContext<'a> {
             parent_task_id: Some(self.task.id()),
             gpu: self.task.gpu().clone(),
             events: self.context.events.clone(),
+            execution_type,
         };
 
         // Look up specialist again for AgentExecution::new
