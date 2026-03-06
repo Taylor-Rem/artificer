@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use artificer_shared::tools::get_tool_schema;
-use super::schema::task::is_task_tool;
+use crate::agent::schema::task::is_task_tool;
 
 /// Validate a tool call before execution.
 ///

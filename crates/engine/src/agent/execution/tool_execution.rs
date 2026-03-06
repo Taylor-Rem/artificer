@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use artificer_shared::tools::get_tool_schema;
 use crate::pool::AgentPool;
-use super::schema::task::{handle_task_tool, is_task_tool};
+use crate::agent::schema::task::{handle_task_tool, is_task_tool};
 use super::tool_validation::validate_tool_call;
-use super::{AgentContext, Task};
+use crate::agent::{AgentContext, Task};
 
 /// Per-turn context for routing and executing tool calls.
 pub struct ToolExecutionContext<'a> {

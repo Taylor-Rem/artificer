@@ -1,12 +1,20 @@
+pub mod tool_execution;
+pub use tool_execution::ToolExecutionContext;
+
 use anyhow::Result;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
-use crate::agent::{Agent, AgentContext, AgentResponse, Task, ToolExecutionContext};
+use crate::agent::{Agent, AgentContext, AgentResponse, Task};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
 use crate::agent::schema::{AgentRoles, ExecutionMode};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
+
+#[cfg(test)]
+mod tool_execution_tests;
+mod execution_types;
+pub mod tool_validation;
 
 pub struct AgentExecution {
     agent: Agent,
@@ -220,7 +228,13 @@ impl AgentExecution {
             let result = tool_ctx
                 .execute_tool(&tool_call.function.name, &tool_call.function.arguments)
                 .await?;
-            results.push(result);
+
+            let wrapped = format!(
+                "<tool_response>\n<tool_name>{}</tool_name>\n<tool_result>\n{}\n</tool_result>\n</tool_response>",
+                tool_call.function.name,
+                result,
+            );
+            results.push(wrapped);
         }
 
         Ok(results)
@@ -272,13 +286,13 @@ impl AgentExecution {
         )
     }
 
-    fn persist_tool_message(&mut self, tool_name: &str, result: &str) -> Result<()> {
-        let content = format!("[{}]: {}", tool_name, result);
+    fn persist_tool_message(&mut self, _tool_name: &str, result: &str) -> Result<()> {
+        // result here is already wrapped — store it as-is
         self.agent_pool.db().add_message(
             self.context.conversation_id,
             Some(self.task.id() as i64),
             "tool",
-            Some(&content),
+            Some(result),
             None,
             &mut self.message_count,
         )

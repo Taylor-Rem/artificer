@@ -2,20 +2,15 @@ mod schema;
 pub mod implementations;
 pub mod macros;
 pub mod execution;
-pub mod tool_execution;
-pub mod tool_validation;
 mod llm_types;
 mod llm_client;
 mod delegation_tools;
 
-#[cfg(test)]
-mod tool_execution_tests;
-
 use artificer_shared::Tool;
-pub use schema::{AgentResponse, AgentContext, AgentRoles, ExecutionMode, Task};
+pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, Task};
 pub use implementations::AgentType;
 pub use execution::AgentExecution;
-pub use tool_execution::ToolExecutionContext;
+pub use execution::ToolExecutionContext;
 
 #[derive(Debug, Clone)]
 pub struct Agent {
