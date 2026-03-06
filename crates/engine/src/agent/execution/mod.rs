@@ -13,7 +13,6 @@ use artificer_shared::{Message, ToolCall};
 
 #[cfg(test)]
 mod tool_execution_tests;
-mod execution_types;
 pub mod tool_validation;
 
 pub struct AgentExecution {
