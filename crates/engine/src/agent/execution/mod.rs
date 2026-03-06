@@ -4,7 +4,7 @@ pub use tool_execution::ToolExecutionContext;
 use anyhow::Result;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
-use crate::agent::{Agent, AgentContext, AgentResponse, Task};
+use crate::agent::{Agent, AgentContext, AgentResponse, ExecutionType, Task};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
 use crate::agent::schema::{AgentRoles, ExecutionMode};
@@ -139,8 +139,61 @@ impl AgentExecution {
     }
 
     async fn execute_specialist(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
-        // Specialists always use agentic mode
-        self.execute_orchestrator(pool).await
+        match self.context.execution_type {
+            ExecutionType::Agentic => self.execute_orchestrator(pool).await,
+            ExecutionType::ToolProxy => self.execute_tool_proxy(pool).await,
+        }
+    }
+
+    async fn execute_tool_proxy(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
+        let mut messages = self.build_initial_messages();
+        let user_goal = self.task.user_goal.clone();
+        messages.push(Message {
+            role: "user".to_string(),
+            content: Some(user_goal),
+            tool_calls: None,
+        });
+
+        let mut all_tool_results: Vec<(String, String)> = Vec::new();
+
+        loop {
+            self.update_system_prompt(&mut messages);
+            let response = self.call_llm(&messages, pool).await?;
+
+            if let Some(tool_calls) = response.tool_calls.clone() {
+                self.persist_assistant_message(None, Some(&tool_calls))?;
+                let tool_results = self.execute_tools(&tool_calls, pool).await?;
+
+                for (tool_call, result) in tool_calls.iter().zip(tool_results.iter()) {
+                    self.persist_tool_message(&tool_call.function.name, result)?;
+                    all_tool_results.push((tool_call.function.name.clone(), result.clone()));
+                }
+
+                messages.push(Message {
+                    role: "assistant".to_string(),
+                    content: response.content.clone(),
+                    tool_calls: Some(tool_calls),
+                });
+                for result in tool_results.iter() {
+                    messages.push(Message {
+                        role: "tool".to_string(),
+                        content: Some(result.clone()),
+                        tool_calls: None,
+                    });
+                }
+
+                if self.task.is_complete() {
+                    break;
+                }
+                continue;
+            }
+
+            // No tool calls — specialist is done reasoning
+            break;
+        }
+
+        let xml = format_tool_results_xml(&all_tool_results);
+        Ok(AgentResponse::complete(xml))
     }
 
     async fn execute_onetime(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
@@ -297,4 +350,16 @@ impl AgentExecution {
             &mut self.message_count,
         )
     }
+}
+
+fn format_tool_results_xml(results: &[(String, String)]) -> String {
+    if results.is_empty() {
+        return "<tool_results/>".to_string();
+    }
+    let inner: String = results
+        .iter()
+        .map(|(name, result)| format!("  <result name=\"{}\">{}</result>", name, result))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("<tool_results>\n{}\n</tool_results>", inner)
 }

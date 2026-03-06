@@ -7,7 +7,7 @@ mod llm_client;
 mod delegation_tools;
 
 use artificer_shared::Tool;
-pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, Task};
+pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, ExecutionType, Task};
 pub use implementations::AgentType;
 pub use execution::AgentExecution;
 pub use execution::ToolExecutionContext;
