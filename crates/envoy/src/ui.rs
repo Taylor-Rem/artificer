@@ -74,26 +74,49 @@ fn handle_event(event: &ChatEvent) {
         ChatEvent::TaskSwitch { from, to } => {
             println!("\n⚡ Switching: {} → {}", from, to);
         }
-        ChatEvent::ToolCall { task, tool, .. } => {
+        ChatEvent::ToolCall { task, tool, args } => {
             println!("🔧 [{}] Calling: {}", task, tool);
-        }
-        ChatEvent::ToolResult { tool: _, result, truncated, .. } => {
-            if *truncated {
-                println!("   ✓ {} [truncated]", result.lines().next().unwrap_or(""));
+            let args_str = if args.is_null() || args == &serde_json::Value::Object(Default::default()) {
+                "(no args)".to_string()
             } else {
-                println!("   ✓ {}", result);
-            }
+                let compact = serde_json::to_string(args).unwrap_or_default();
+                if compact.len() > 300 {
+                    format!("{}… ({} chars)", &compact[..300], compact.len())
+                } else {
+                    compact
+                }
+            };
+            println!("   args: {}", args_str);
+        }
+        ChatEvent::ToolResult { task, tool, result, truncated } => {
+            let lines: Vec<&str> = result.lines().collect();
+            let line_count = lines.len();
+            let char_count = result.len();
+            let preview: String = if result.len() > 400 {
+                format!("{}…", &result[..400])
+            } else {
+                result.clone()
+            };
+            let trunc_flag = if *truncated { " [TRUNCATED BY SERVER]" } else { "" };
+            println!(
+                "   ✓ [{}] {} → {} lines, {} chars{}\n   {}",
+                task, tool, line_count, char_count, trunc_flag, preview
+            );
+        }
+        ChatEvent::ResponseComplete { content } => {
+            println!("\n📨 ResponseComplete ({} chars): {}", content.len(),
+                     if content.len() > 200 { format!("{}…", &content[..200]) } else { content.clone() }
+            );
         }
         ChatEvent::StreamChunk { content } => {
             print!("{}", content);
             io::stdout().flush().ok();
         }
-        ChatEvent::Done { .. } => {
-            // Response complete, nothing to print
+        ChatEvent::Done { conversation_id } => {
+            println!("\n✅ Done (conv_id={})", conversation_id);
         }
         ChatEvent::Error { message } => {
             eprintln!("\n❌ Error: {}", message);
         }
-        _ => {}
     }
 }

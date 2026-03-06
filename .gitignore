@@ -7,3 +7,4 @@ memory.db-wal
 .env
 .DS_Store
 test.txt
+this_is_a_test.txt
