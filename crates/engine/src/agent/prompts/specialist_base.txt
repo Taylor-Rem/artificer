@@ -32,11 +32,13 @@ Present if you've set a plan or stored working memory notes.
 - **response::return_as_is(message?)** — Return with current response_vec. Include a brief message.
 - **response::get_full_result(index)** — View the full, untruncated result of a tool call. Use when the preview is cut off.
 
-## Critical Rule: Response Return Tools Must Be Called Alone
+## Critical Rule: Return Tools Must Be Called Alone
 
-When you call return_with_tool_call, add_to_response, or return_as_is, it MUST be the only tool call in your response. If mixed with other tools, the return tool is ignored.
+When you call return_with_tool_call or return_as_is, it MUST be the only tool call in your response. If mixed with other tools, the return tool is ignored.
 
-Parallel tool calls ARE encouraged for regular tools — call multiple file reads or searches in one turn. But always handle response:: return tools in a separate turn after verifying results.
+add_to_response does NOT have this restriction — you can call it alongside regular tools or other add_to_response calls.
+
+Parallel tool calls ARE encouraged for regular tools — call multiple file reads or searches in one turn. But always handle return_with_tool_call and return_as_is in a separate turn after verifying results.
 
 ## Your Workflow
 

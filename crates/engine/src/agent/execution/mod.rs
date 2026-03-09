@@ -11,7 +11,7 @@ use crate::agent::{Agent, AgentContext, AgentResponse, Task};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
 use crate::agent::schema::{AgentRoles, ExecutionMode};
-use crate::agent::specialist_tools::{is_return_triggering_tool, handle_specialist_control_tool};
+use crate::agent::specialist_tools::{is_return_triggering_tool, is_specialist_control_tool, handle_specialist_control_tool};
 use crate::agent::schema::task::{handle_task_tool, is_task_tool};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
@@ -171,8 +171,8 @@ impl AgentExecution {
                 let (task_calls, regular_calls): (Vec<_>, Vec<_>) = non_return_calls.into_iter()
                     .partition(|tc| is_task_tool(&tc.function.name));
 
-                let (get_full_result_calls, toolbelt_calls): (Vec<_>, Vec<_>) = regular_calls.into_iter()
-                    .partition(|tc| tc.function.name == "response::get_full_result");
+                let (response_control_calls, toolbelt_calls): (Vec<_>, Vec<_>) = regular_calls.into_iter()
+                    .partition(|tc| is_specialist_control_tool(&tc.function.name));
 
                 // Execute task management tools
                 for tool_call in &task_calls {
@@ -214,8 +214,8 @@ impl AgentExecution {
                     self.persist_tool_message(tool_name, &result)?;
                 }
 
-                // Execute response::get_full_result (read-only, not return-triggering)
-                for tool_call in &get_full_result_calls {
+                // Execute response control tools (non-return: get_full_result, add_to_response)
+                for tool_call in &response_control_calls {
                     let tool_name = &tool_call.function.name;
                     let args = &tool_call.function.arguments;
 
@@ -233,7 +233,7 @@ impl AgentExecution {
                 }
 
                 // Only process return tools if they were the ONLY calls in this batch
-                if !return_calls.is_empty() && task_calls.is_empty() && toolbelt_calls.is_empty() && get_full_result_calls.is_empty() {
+                if !return_calls.is_empty() && task_calls.is_empty() && toolbelt_calls.is_empty() && response_control_calls.is_empty() {
                     for tool_call in &return_calls {
                         let tool_name = &tool_call.function.name;
                         let args = &tool_call.function.arguments;

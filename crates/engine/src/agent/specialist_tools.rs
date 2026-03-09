@@ -72,7 +72,6 @@ pub fn is_specialist_control_tool(name: &str) -> bool {
 pub fn is_return_triggering_tool(name: &str) -> bool {
     matches!(name,
         "response::return_with_tool_call" |
-        "response::add_to_response" |
         "response::return_as_is"
     )
 }
