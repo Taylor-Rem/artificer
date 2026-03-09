@@ -21,7 +21,7 @@ impl<'a> ToolExecutionContext<'a> {
 
     /// Execute any tool call — validates, routes, and emits events.
     pub async fn execute_tool(&mut self, tool_name: &str, args: &Value) -> Result<String> {
-        // Validate (skips task:: and delegate:: tools)
+        // Validate (skips task::, delegate::, and response:: tools)
         validate_tool_call(tool_name, args)?;
 
         // Emit tool call event
@@ -100,14 +100,6 @@ impl<'a> ToolExecutionContext<'a> {
             );
         }
 
-        let execution_type = args["execution_type"]
-            .as_str()
-            .and_then(crate::agent::ExecutionType::from_str)
-            .unwrap_or_else(|| {
-                eprintln!("Missing or invalid execution_type, defaulting to Agentic");
-                crate::agent::ExecutionType::Agentic
-            });
-
         let specialist_context = crate::agent::AgentContext {
             device_id: self.context.device_id,
             device_key: self.context.device_key.clone(),
@@ -115,7 +107,6 @@ impl<'a> ToolExecutionContext<'a> {
             parent_task_id: Some(self.task.id()),
             gpu: self.task.gpu().clone(),
             events: self.context.events.clone(),
-            execution_type,
         };
 
         // Look up specialist again for AgentExecution::new
@@ -160,7 +151,10 @@ impl<'a> ToolExecutionContext<'a> {
 
     /// Check whether a tool is available for this agent to call.
     pub fn is_tool_available(&self, tool_name: &str) -> bool {
-        if is_task_tool(tool_name) || tool_name.starts_with("delegate::") {
+        if is_task_tool(tool_name)
+            || tool_name.starts_with("delegate::")
+            || tool_name.starts_with("response::")
+        {
             return true;
         }
         get_tool_schema(tool_name).is_ok()

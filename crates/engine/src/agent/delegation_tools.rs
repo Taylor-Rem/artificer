@@ -13,12 +13,6 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 description: "What you need FileSmith to do",
                 required: true,
             },
-            ParameterSchema {
-                name: "execution_type",
-                type_name: "string",
-                description: "How the specialist should execute: 'tool_proxy' returns raw tool results with no synthesis, 'agentic' runs the full reasoning loop and returns a conclusion.",
-                required: true,
-            },
         ],
     },
     ToolSchema {
@@ -32,12 +26,6 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 description: "What you need WebResearcher to do",
                 required: true,
             },
-            ParameterSchema {
-                name: "execution_type",
-                type_name: "string",
-                description: "How the specialist should execute: 'tool_proxy' returns raw tool results with no synthesis, 'agentic' runs the full reasoning loop and returns a conclusion.",
-                required: true,
-            },
         ],
     },
     ToolSchema {
@@ -49,12 +37,6 @@ pub static DELEGATION_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
                 name: "goal",
                 type_name: "string",
                 description: "What you need Archivist to do",
-                required: true,
-            },
-            ParameterSchema {
-                name: "execution_type",
-                type_name: "string",
-                description: "How the specialist should execute: 'tool_proxy' returns raw tool results with no synthesis, 'agentic' runs the full reasoning loop and returns a conclusion.",
                 required: true,
             },
         ],

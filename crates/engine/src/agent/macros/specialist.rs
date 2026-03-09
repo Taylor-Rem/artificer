@@ -9,6 +9,7 @@ macro_rules! define_agents {
                 toolbelts: [$($toolbelt:literal),* $(,)?],
                 $(task_tools: $has_task_tools:expr,)?
                 $(delegation_tools: $has_delegation_tools:expr,)?
+                $(specialist_tools: $has_specialist_tools:expr,)?
             }
         ),* $(,)?
     ) => {
@@ -55,6 +56,19 @@ macro_rules! define_agents {
                                         .map(|schema| schema.to_tool())
                                         .collect();
                                     tools.extend(delegation_tools);
+                                }
+                            )?
+
+                            // Specialist control tools
+                            $(
+                                if $has_specialist_tools {
+                                    use crate::agent::specialist_tools::SPECIALIST_CONTROL_TOOLS;
+                                    let specialist_ctrl_tools: Vec<artificer_shared::Tool> =
+                                        SPECIALIST_CONTROL_TOOLS
+                                            .iter()
+                                            .map(|schema| schema.to_tool())
+                                            .collect();
+                                    tools.extend(specialist_ctrl_tools);
                                 }
                             )?
 
