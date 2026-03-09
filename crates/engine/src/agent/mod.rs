@@ -5,9 +5,10 @@ pub mod execution;
 mod llm_types;
 mod llm_client;
 mod delegation_tools;
+pub mod specialist_tools;
 
 use artificer_shared::Tool;
-pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, ExecutionType, Task};
+pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, Task};
 pub use implementations::AgentType;
 pub use execution::AgentExecution;
 pub use execution::ToolExecutionContext;
@@ -47,9 +48,11 @@ impl Agent {
         prompt.push_str(&self.format_tools());
         prompt.push_str("\n\n");
 
-        // Stage 4: Current task state
-        prompt.push_str("# Current Task State\n\n");
-        prompt.push_str(task_state);
+        // Stage 4: Current task state (omitted when empty — specialists use message 3 instead)
+        if !task_state.is_empty() {
+            prompt.push_str("# Current Task State\n\n");
+            prompt.push_str(task_state);
+        }
 
         prompt
     }

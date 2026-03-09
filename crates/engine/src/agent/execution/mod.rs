@@ -1,19 +1,23 @@
 pub mod tool_execution;
 pub use tool_execution::ToolExecutionContext;
 
+pub mod specialist_state;
+pub use specialist_state::SpecialistState;
+
 use anyhow::Result;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
-use crate::agent::{Agent, AgentContext, AgentResponse, ExecutionType, Task};
+use crate::agent::{Agent, AgentContext, AgentResponse, Task};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
 use crate::agent::schema::{AgentRoles, ExecutionMode};
+use crate::agent::specialist_tools::{is_specialist_control_tool, handle_specialist_control_tool};
+use crate::agent::schema::task::{handle_task_tool, is_task_tool};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
 
 #[cfg(test)]
 mod tool_execution_tests;
-mod execution_types;
 pub mod tool_validation;
 
 pub struct AgentExecution {
@@ -93,7 +97,6 @@ impl AgentExecution {
             self.update_system_prompt(&mut messages);
             let response = self.call_llm(&messages, pool).await?;
 
-            // Clone tool_calls to avoid borrow checker issues across async boundaries
             if let Some(tool_calls) = response.tool_calls.clone() {
                 self.persist_assistant_message(None, Some(&tool_calls))?;
                 let tool_results = self.execute_tools(&tool_calls, pool).await?;
@@ -102,7 +105,6 @@ impl AgentExecution {
                     self.persist_tool_message(&tool_call.function.name, result)?;
                 }
 
-                // Add assistant + tool result turns for next LLM iteration
                 messages.push(Message {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
@@ -139,61 +141,134 @@ impl AgentExecution {
     }
 
     async fn execute_specialist(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
-        match self.context.execution_type {
-            ExecutionType::Agentic => self.execute_orchestrator(pool).await,
-            ExecutionType::ToolProxy => self.execute_tool_proxy(pool).await,
-        }
-    }
-
-    async fn execute_tool_proxy(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
-        let mut messages = self.build_initial_messages();
-        let user_goal = self.task.user_goal.clone();
-        messages.push(Message {
-            role: "user".to_string(),
-            content: Some(user_goal),
-            tool_calls: None,
-        });
-
-        let mut all_tool_results: Vec<(String, String)> = Vec::new();
+        let mut specialist_state = SpecialistState::new();
+        let orchestrator_request = self.task.user_goal.clone();
 
         loop {
-            self.update_system_prompt(&mut messages);
+            let messages = self.build_specialist_messages(&specialist_state, &orchestrator_request);
             let response = self.call_llm(&messages, pool).await?;
 
             if let Some(tool_calls) = response.tool_calls.clone() {
                 self.persist_assistant_message(None, Some(&tool_calls))?;
-                let tool_results = self.execute_tools(&tool_calls, pool).await?;
 
-                for (tool_call, result) in tool_calls.iter().zip(tool_results.iter()) {
-                    self.persist_tool_message(&tool_call.function.name, result)?;
-                    all_tool_results.push((tool_call.function.name.clone(), result.clone()));
+                for tool_call in &tool_calls {
+                    let tool_name = &tool_call.function.name;
+                    let args = &tool_call.function.arguments;
+
+                    // Emit tool call event
+                    if let Some(events) = &self.context.events {
+                        events.tool_call(
+                            &format!("task_{}", self.task.id()),
+                            tool_name,
+                            args.clone(),
+                        );
+                    }
+
+                    let result = if is_specialist_control_tool(tool_name) {
+                        handle_specialist_control_tool(&mut specialist_state, tool_name, args)
+                            .unwrap_or_else(|e| format!("Error: {}", e))
+                    } else if is_task_tool(tool_name) {
+                        handle_task_tool(&mut self.task, tool_name, args)
+                            .unwrap_or_else(|e| format!("Error: {}", e))
+                    } else {
+                        let exec_result = pool.tool_executor()
+                            .execute(
+                                tool_name,
+                                args,
+                                self.context.device_id as i64,
+                                &self.context.device_key,
+                            )
+                            .await
+                            .unwrap_or_else(|e| format!("Error: {}", e));
+
+                        specialist_state.record_tool_call(
+                            tool_name.clone(),
+                            args.clone(),
+                            exec_result.clone(),
+                        );
+
+                        exec_result
+                    };
+
+                    // Emit tool result event
+                    if let Some(events) = &self.context.events {
+                        events.tool_result(
+                            &format!("task_{}", self.task.id()),
+                            tool_name,
+                            result.clone(),
+                        );
+                    }
+
+                    self.persist_tool_message(tool_name, &result)?;
                 }
 
-                messages.push(Message {
-                    role: "assistant".to_string(),
-                    content: response.content.clone(),
-                    tool_calls: Some(tool_calls),
-                });
-                for result in tool_results.iter() {
-                    messages.push(Message {
-                        role: "tool".to_string(),
-                        content: Some(result.clone()),
-                        tool_calls: None,
-                    });
-                }
-
-                if self.task.is_complete() {
+                if specialist_state.should_return() || self.task.is_complete() {
                     break;
                 }
                 continue;
             }
 
-            // No tool calls — specialist is done reasoning
-            break;
+            // Text-only response — treat as implicit return
+            if let Some(content) = &response.content {
+                let content_owned = content.clone();
+                specialist_state.set_response_message(content_owned.clone());
+                self.persist_assistant_message(Some(&content_owned), None)?;
+                break;
+            }
+
+            return Err(anyhow::anyhow!("Specialist returned empty response"));
         }
 
-        let xml = format_tool_results_xml(&all_tool_results);
-        Ok(AgentResponse::complete(xml))
+        // Get the response message, or do a final LLM call if none was set
+        let final_message = if let Some(msg) = specialist_state.response_message.clone() {
+            msg
+        } else {
+            let mut summary_messages =
+                self.build_specialist_messages(&specialist_state, &orchestrator_request);
+            summary_messages.push(Message {
+                role: "user".to_string(),
+                content: Some(
+                    "Provide a brief summary of what you accomplished.".to_string(),
+                ),
+                tool_calls: None,
+            });
+            let summary_response = self.call_llm(&summary_messages, pool).await?;
+            summary_response.content.unwrap_or_else(|| "Task completed.".to_string())
+        };
+
+        let summary = specialist_state.build_delegation_summary(&final_message);
+        Ok(AgentResponse::complete(summary))
+    }
+
+    fn build_specialist_messages(
+        &self,
+        specialist_state: &SpecialistState,
+        orchestrator_request: &str,
+    ) -> Vec<Message> {
+        // System prompt without task state (task state goes in message 3)
+        let system_prompt = self.agent.build_system_prompt("");
+
+        // Message 3: execution state from specialist_state + task
+        let task_xml = self.task.state_summary_xml();
+        let state_xml = specialist_state.build_state_xml(&task_xml);
+
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: Some(system_prompt),
+                tool_calls: None,
+            },
+            Message {
+                role: "user".to_string(),
+                content: Some(orchestrator_request.to_string()),
+                tool_calls: None,
+            },
+            Message {
+                role: "user".to_string(),
+                content: Some(format!("Current execution state:\n\n{}", state_xml)),
+                tool_calls: None,
+            },
+        ]
     }
 
     async fn execute_onetime(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
@@ -340,7 +415,6 @@ impl AgentExecution {
     }
 
     fn persist_tool_message(&mut self, _tool_name: &str, result: &str) -> Result<()> {
-        // result here is already wrapped — store it as-is
         self.agent_pool.db().add_message(
             self.context.conversation_id,
             Some(self.task.id() as i64),
@@ -350,16 +424,4 @@ impl AgentExecution {
             &mut self.message_count,
         )
     }
-}
-
-fn format_tool_results_xml(results: &[(String, String)]) -> String {
-    if results.is_empty() {
-        return "<tool_results/>".to_string();
-    }
-    let inner: String = results
-        .iter()
-        .map(|(name, result)| format!("  <result name=\"{}\">{}</result>", name, result))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("<tool_results>\n{}\n</tool_results>", inner)
 }

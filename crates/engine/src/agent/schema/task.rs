@@ -161,6 +161,56 @@ impl Task {
         parts.join("\n")
     }
 
+    /// Generate XML summary of task state for the specialist's message 3.
+    pub fn state_summary_xml(&self) -> String {
+        let mut xml = String::new();
+        xml.push_str("<task_progress>\n");
+        xml.push_str(&format!("  <user_goal>{}</user_goal>\n", self.user_goal));
+
+        if let Some(ref goal) = self.agent_goal {
+            xml.push_str(&format!("  <agent_goal>{}</agent_goal>\n", goal));
+        }
+
+        if let Some(ref plan) = self.plan {
+            xml.push_str("  <plan>\n");
+            for step in plan.iter() {
+                xml.push_str("    <task_step>\n");
+                xml.push_str(&format!("      <goal>{}</goal>\n", step.goal));
+                xml.push_str(&format!("      <progress>{:?}</progress>\n", step.progress));
+                xml.push_str("    </task_step>\n");
+            }
+            xml.push_str("  </plan>\n");
+        }
+
+        if let Some(total) = self.total_iterations {
+            xml.push_str(&format!(
+                "  <iterations>{}/{}</iterations>\n",
+                self.completed_iterations, total
+            ));
+        }
+
+        if let Some(ref step) = self.current_step {
+            xml.push_str(&format!("  <current_step>{}</current_step>\n", step.goal));
+        }
+
+        xml.push_str("</task_progress>\n");
+
+        if !self.notes.is_empty() {
+            xml.push_str("\n<notes>\n");
+            let mut sorted = self.notes.clone();
+            sorted.sort_by(|a, b| b.importance.cmp(&a.importance));
+            for note in &sorted {
+                xml.push_str(&format!(
+                    "  <note key=\"{}\" importance=\"{}\">{}</note>\n",
+                    note.key, note.importance, note.value
+                ));
+            }
+            xml.push_str("</notes>\n");
+        }
+
+        xml
+    }
+
     // -------------------------------------------------------------------------
     // Modification methods (own task only — auto-persist)
     // -------------------------------------------------------------------------

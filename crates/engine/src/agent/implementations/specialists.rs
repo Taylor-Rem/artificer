@@ -17,6 +17,7 @@ define_agents! {
         system_prompt: include_str!("../prompts/file_smith.txt"),
         toolbelts: ["FileSmith::"],
         task_tools: true,
+        specialist_tools: true,
     },
 
     WebResearcher: AgentRoles::Specialist => {
@@ -25,6 +26,7 @@ define_agents! {
         system_prompt: include_str!("../prompts/web_researcher.txt"),
         toolbelts: ["WebSearch::"],
         task_tools: true,
+        specialist_tools: true,
     },
 
     Archivist: AgentRoles::Specialist => {
@@ -33,6 +35,7 @@ define_agents! {
         system_prompt: include_str!("../prompts/archivist.txt"),
         toolbelts: ["Archivist::"],
         task_tools: true,
+        specialist_tools: true,
     },
 
     TitleGenerator: AgentRoles::Background => {

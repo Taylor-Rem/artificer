@@ -20,33 +20,3 @@ pub enum AgentRoles {
     Specialist,
     Background
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionType {
-    /// Execute tools as needed, collect raw results, return them as XML.
-    /// Skips the final LLM synthesis step entirely.
-    ToolProxy,
-
-    /// Full agentic loop — reason, call tools, synthesize a conclusion.
-    /// Returns an LLM-generated response.
-    Agentic,
-}
-
-impl ExecutionType {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "tool_proxy" => Some(Self::ToolProxy),
-            "agentic" => Some(Self::Agentic),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for ExecutionType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ToolProxy => write!(f, "tool_proxy"),
-            Self::Agentic => write!(f, "agentic"),
-        }
-    }
-}

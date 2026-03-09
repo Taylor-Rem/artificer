@@ -9,8 +9,11 @@ use crate::agent::schema::task::is_task_tool;
 /// parameters are present in `args`. Task tools bypass schema
 /// validation — they are always considered valid here.
 pub fn validate_tool_call(tool_name: &str, args: &Value) -> Result<()> {
-    // Task tools and delegation tools are handled internally — always valid at this stage
-    if is_task_tool(tool_name) || tool_name.starts_with("delegate::") {
+    // Task, delegation, and specialist control tools are handled internally — always valid here
+    if is_task_tool(tool_name)
+        || tool_name.starts_with("delegate::")
+        || tool_name.starts_with("response::")
+    {
         return Ok(());
     }
 
