@@ -11,7 +11,7 @@ use crate::agent::{Agent, AgentContext, AgentResponse, Task};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
 use crate::agent::schema::{AgentRoles, ExecutionMode};
-use crate::agent::specialist_tools::{is_specialist_control_tool, handle_specialist_control_tool};
+use crate::agent::specialist_tools::{is_return_triggering_tool, handle_specialist_control_tool};
 use crate::agent::schema::task::{handle_task_tool, is_task_tool};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
@@ -141,65 +141,119 @@ impl AgentExecution {
     }
 
     async fn execute_specialist(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
+        const MAX_SPECIALIST_ITERATIONS: u32 = 25;
+
         let mut specialist_state = SpecialistState::new();
         let orchestrator_request = self.task.user_goal.clone();
+        let mut iteration_count: u32 = 0;
 
         loop {
+            iteration_count += 1;
+            if iteration_count > MAX_SPECIALIST_ITERATIONS {
+                eprintln!(
+                    "Specialist hit max iteration limit ({}) for task {}",
+                    MAX_SPECIALIST_ITERATIONS, self.task.id()
+                );
+                specialist_state.force_return();
+                break;
+            }
+
             let messages = self.build_specialist_messages(&specialist_state, &orchestrator_request);
             let response = self.call_llm(&messages, pool).await?;
 
             if let Some(tool_calls) = response.tool_calls.clone() {
                 self.persist_assistant_message(None, Some(&tool_calls))?;
 
-                for tool_call in &tool_calls {
+                // Separate return-triggering response tools from everything else
+                let (return_calls, non_return_calls): (Vec<_>, Vec<_>) = tool_calls.iter()
+                    .partition(|tc| is_return_triggering_tool(&tc.function.name));
+
+                let (task_calls, regular_calls): (Vec<_>, Vec<_>) = non_return_calls.into_iter()
+                    .partition(|tc| is_task_tool(&tc.function.name));
+
+                let (get_full_result_calls, toolbelt_calls): (Vec<_>, Vec<_>) = regular_calls.into_iter()
+                    .partition(|tc| tc.function.name == "response::get_full_result");
+
+                // Execute task management tools
+                for tool_call in &task_calls {
                     let tool_name = &tool_call.function.name;
                     let args = &tool_call.function.arguments;
 
-                    // Emit tool call event
                     if let Some(events) = &self.context.events {
-                        events.tool_call(
-                            &format!("task_{}", self.task.id()),
-                            tool_name,
-                            args.clone(),
-                        );
+                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
                     }
 
-                    let result = if is_specialist_control_tool(tool_name) {
-                        handle_specialist_control_tool(&mut specialist_state, tool_name, args)
-                            .unwrap_or_else(|e| format!("Error: {}", e))
-                    } else if is_task_tool(tool_name) {
-                        handle_task_tool(&mut self.task, tool_name, args)
-                            .unwrap_or_else(|e| format!("Error: {}", e))
-                    } else {
-                        let exec_result = pool.tool_executor()
-                            .execute(
-                                tool_name,
-                                args,
-                                self.context.device_id as i64,
-                                &self.context.device_key,
-                            )
-                            .await
+                    let result = handle_task_tool(&mut self.task, tool_name, args)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+
+                    if let Some(events) = &self.context.events {
+                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                    }
+                    self.persist_tool_message(tool_name, &result)?;
+                }
+
+                // Execute regular toolbelt tools
+                for tool_call in &toolbelt_calls {
+                    let tool_name = &tool_call.function.name;
+                    let args = &tool_call.function.arguments;
+
+                    if let Some(events) = &self.context.events {
+                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                    }
+
+                    let result = pool.tool_executor()
+                        .execute(tool_name, args, self.context.device_id as i64, &self.context.device_key)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+
+                    specialist_state.record_tool_call(tool_name.clone(), args.clone(), result.clone());
+
+                    if let Some(events) = &self.context.events {
+                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                    }
+                    self.persist_tool_message(tool_name, &result)?;
+                }
+
+                // Execute response::get_full_result (read-only, not return-triggering)
+                for tool_call in &get_full_result_calls {
+                    let tool_name = &tool_call.function.name;
+                    let args = &tool_call.function.arguments;
+
+                    if let Some(events) = &self.context.events {
+                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                    }
+
+                    let result = handle_specialist_control_tool(&mut specialist_state, tool_name, args)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+
+                    if let Some(events) = &self.context.events {
+                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                    }
+                    self.persist_tool_message(tool_name, &result)?;
+                }
+
+                // Only process return tools if they were the ONLY calls in this batch
+                if !return_calls.is_empty() && task_calls.is_empty() && toolbelt_calls.is_empty() && get_full_result_calls.is_empty() {
+                    for tool_call in &return_calls {
+                        let tool_name = &tool_call.function.name;
+                        let args = &tool_call.function.arguments;
+
+                        if let Some(events) = &self.context.events {
+                            events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                        }
+
+                        let result = handle_specialist_control_tool(&mut specialist_state, tool_name, args)
                             .unwrap_or_else(|e| format!("Error: {}", e));
 
-                        specialist_state.record_tool_call(
-                            tool_name.clone(),
-                            args.clone(),
-                            exec_result.clone(),
-                        );
-
-                        exec_result
-                    };
-
-                    // Emit tool result event
-                    if let Some(events) = &self.context.events {
-                        events.tool_result(
-                            &format!("task_{}", self.task.id()),
-                            tool_name,
-                            result.clone(),
-                        );
+                        if let Some(events) = &self.context.events {
+                            events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                        }
+                        self.persist_tool_message(tool_name, &result)?;
                     }
-
-                    self.persist_tool_message(tool_name, &result)?;
+                } else if !return_calls.is_empty() {
+                    eprintln!(
+                        "Warning: response:: return tools mixed with other tools in batch — ignoring return tools"
+                    );
                 }
 
                 if specialist_state.should_return() || self.task.is_complete() {
@@ -219,22 +273,9 @@ impl AgentExecution {
             return Err(anyhow::anyhow!("Specialist returned empty response"));
         }
 
-        // Get the response message, or do a final LLM call if none was set
-        let final_message = if let Some(msg) = specialist_state.response_message.clone() {
-            msg
-        } else {
-            let mut summary_messages =
-                self.build_specialist_messages(&specialist_state, &orchestrator_request);
-            summary_messages.push(Message {
-                role: "user".to_string(),
-                content: Some(
-                    "Provide a brief summary of what you accomplished.".to_string(),
-                ),
-                tool_calls: None,
-            });
-            let summary_response = self.call_llm(&summary_messages, pool).await?;
-            summary_response.content.unwrap_or_else(|| "Task completed.".to_string())
-        };
+        let final_message = specialist_state.response_message
+            .clone()
+            .unwrap_or_else(|| "Task completed.".to_string());
 
         let summary = specialist_state.build_delegation_summary(&final_message);
         Ok(AgentResponse::complete(summary))
@@ -245,12 +286,16 @@ impl AgentExecution {
         specialist_state: &SpecialistState,
         orchestrator_request: &str,
     ) -> Vec<Message> {
-        // System prompt without task state (task state goes in message 3)
         let system_prompt = self.agent.build_system_prompt("");
 
-        // Message 3: execution state from specialist_state + task
         let task_xml = self.task.state_summary_xml();
         let state_xml = specialist_state.build_state_xml(&task_xml);
+
+        let user_content = format!(
+            "<request>\n{}\n</request>\n\n<execution_state>\n{}\n</execution_state>",
+            orchestrator_request,
+            state_xml
+        );
 
         vec![
             Message {
@@ -260,12 +305,7 @@ impl AgentExecution {
             },
             Message {
                 role: "user".to_string(),
-                content: Some(orchestrator_request.to_string()),
-                tool_calls: None,
-            },
-            Message {
-                role: "user".to_string(),
-                content: Some(format!("Current execution state:\n\n{}", state_xml)),
+                content: Some(user_content),
                 tool_calls: None,
             },
         ]

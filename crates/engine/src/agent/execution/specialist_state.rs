@@ -72,6 +72,25 @@ impl SpecialistState {
         self.response_message = Some(msg);
     }
 
+    /// Force return — used by the safety cap when max iterations are exceeded.
+    pub fn force_return(&mut self) {
+        self.should_return = true;
+        if self.response_message.is_none() {
+            self.response_message = Some(
+                "Max iteration limit reached. Returning with available results.".to_string()
+            );
+        }
+    }
+
+    /// Get the full, untruncated result for a tool call by index.
+    pub fn get_full_result(&self, index: usize) -> Result<String, String> {
+        if index == 0 || index > self.tool_calls.len() {
+            return Err(format!("Invalid index: {}. Valid: 1-{}", index, self.tool_calls.len()));
+        }
+        let tc = &self.tool_calls[index - 1];
+        Ok(tc.tool_result.clone())
+    }
+
     /// Build the XML for message 3 (execution state). Rebuilt from scratch each iteration.
     pub fn build_state_xml(&self, task_xml: &str) -> String {
         let mut xml = String::new();
