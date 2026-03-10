@@ -102,6 +102,28 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON background(status);
         CREATE INDEX IF NOT EXISTS idx_jobs_device ON background(device_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_priority ON background(priority DESC);
+
+        -- Execution traces
+        -- One row per LLM call in the agent loop, for post-hoc behavioral analysis.
+        CREATE TABLE IF NOT EXISTS execution_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            agent_name TEXT NOT NULL,
+            iteration INTEGER NOT NULL,
+            system_prompt_preview TEXT,
+            input_context TEXT NOT NULL,
+            reasoning TEXT,
+            tool_calls TEXT,
+            tool_results TEXT,
+            classification TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            llm_duration_ms INTEGER,
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_traces_task ON execution_traces(task_id);
+        CREATE INDEX IF NOT EXISTS idx_traces_task_iteration ON execution_traces(task_id, iteration);
+        CREATE INDEX IF NOT EXISTS idx_traces_classification ON execution_traces(classification);
     ")?;
     Ok(())
 }

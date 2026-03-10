@@ -86,4 +86,11 @@ impl EventSender {
             "conversation_id": conversation_id,
         }));
     }
+
+    pub fn reasoning(&self, task: &str, content: String) {
+        self.send("reasoning", serde_json::json!({
+            "task": task,
+            "content": content,
+        }));
+    }
 }

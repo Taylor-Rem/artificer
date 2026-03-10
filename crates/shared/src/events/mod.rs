@@ -30,4 +30,8 @@ pub enum ChatEvent {
     Error {
         message: String,
     },
+    Reasoning {
+        task: String,
+        content: String,
+    },
 }

@@ -30,6 +30,17 @@ register_toolbelt! {
                 description: "Retrieves a conversation and all messages by title for the current device",
                 params: ["title": "string" => "Title of the conversation to retrieve"]
             },
+            "get_task_trace" => get_task_trace {
+                description: "Get the execution trace for a task showing every LLM iteration, what the model reasoned, what tools it called, and how each iteration was classified. Use this to debug agent behavior.",
+                params: ["task_id": "integer" => "The task ID to get traces for"]
+            },
+            "get_trace_detail" => get_trace_detail {
+                description: "Get the full detail for a specific iteration of a task trace, including the complete input context that was sent to the model. Use for deep debugging of a specific decision.",
+                params: [
+                    "task_id": "integer" => "The task ID",
+                    "iteration": "integer" => "The iteration number to inspect"
+                ]
+            },
         }
     }
 }
@@ -66,6 +77,23 @@ impl Archivist {
              ORDER BY last_accessed DESC",
             rusqlite::params![],
         )
+    }
+
+    fn get_task_trace(&self, args: &serde_json::Value) -> Result<String> {
+        let task_id = args["task_id"].as_u64().unwrap_or(0);
+        if task_id == 0 {
+            return Ok("Error: task_id is required".to_string());
+        }
+        db::get().get_execution_traces(task_id)
+    }
+
+    fn get_trace_detail(&self, args: &serde_json::Value) -> Result<String> {
+        let task_id = args["task_id"].as_u64().unwrap_or(0);
+        let iteration = args["iteration"].as_u64().unwrap_or(0) as u32;
+        if task_id == 0 || iteration == 0 {
+            return Ok("Error: task_id and iteration are required".to_string());
+        }
+        db::get().get_execution_trace_detail(task_id, iteration)
     }
 
     fn get_conversation(&self, args: &serde_json::Value) -> Result<String> {

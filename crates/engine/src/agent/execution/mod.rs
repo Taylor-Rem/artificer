@@ -93,17 +93,60 @@ impl AgentExecution {
             tool_calls: None,
         });
 
+        let mut iteration_count: u32 = 0;
+
         loop {
+            iteration_count += 1;
             self.update_system_prompt(&mut messages);
+
+            let system_preview = messages.first()
+                .and_then(|m| m.content.as_deref())
+                .map(|s| if s.len() > 500 { &s[..500] } else { s })
+                .map(String::from);
+
+            // Log the last user message as the input context (not the full history)
+            let input_context = messages.iter().rev()
+                .find(|m| m.role == "user")
+                .and_then(|m| m.content.as_deref())
+                .unwrap_or("")
+                .to_string();
+
+            let start_time = std::time::Instant::now();
             let response = self.call_llm(&messages, pool).await?;
+            let llm_duration = start_time.elapsed().as_millis() as u64;
 
             if let Some(tool_calls) = response.tool_calls.clone() {
-                self.persist_assistant_message(None, Some(&tool_calls))?;
+                let reasoning = response.content.clone();
+
+                if let (Some(text), Some(events)) = (&reasoning, &self.context.events) {
+                    if !text.is_empty() {
+                        events.reasoning(&format!("task_{}", self.task.id()), text.clone());
+                    }
+                }
+
+                self.persist_assistant_message(reasoning.as_deref(), Some(&tool_calls))?;
                 let tool_results = self.execute_tools(&tool_calls, pool).await?;
 
                 for (tool_call, result) in tool_calls.iter().zip(tool_results.iter()) {
                     self.persist_tool_message(&tool_call.function.name, result)?;
                 }
+
+                let classification = classify_orchestrator_iteration(&tool_calls);
+                let tool_calls_json = serde_json::to_string(&tool_calls).ok();
+                let tool_results_json = serde_json::to_string(&tool_results).ok();
+
+                let _ = pool.db().log_execution_trace(
+                    self.task.id(),
+                    self.agent.name,
+                    iteration_count,
+                    system_preview.as_deref(),
+                    &input_context,
+                    reasoning.as_deref(),
+                    tool_calls_json.as_deref(),
+                    tool_results_json.as_deref(),
+                    &classification,
+                    Some(llm_duration),
+                );
 
                 messages.push(Message {
                     role: "assistant".to_string(),
@@ -127,6 +170,20 @@ impl AgentExecution {
             // Text response — stream already sent, persist and return
             if let Some(content) = &response.content {
                 let content_owned = content.clone();
+
+                let _ = pool.db().log_execution_trace(
+                    self.task.id(),
+                    self.agent.name,
+                    iteration_count,
+                    system_preview.as_deref(),
+                    &input_context,
+                    Some(&content_owned),
+                    None,
+                    None,
+                    "text_response",
+                    Some(llm_duration),
+                );
+
                 self.persist_assistant_message(Some(&content_owned), None)?;
                 return Ok(AgentResponse::complete(content_owned));
             }
@@ -159,10 +216,32 @@ impl AgentExecution {
             }
 
             let messages = self.build_specialist_messages(&specialist_state, &orchestrator_request);
+
+            let system_preview = messages.first()
+                .and_then(|m| m.content.as_deref())
+                .map(|s| if s.len() > 500 { &s[..500] } else { s })
+                .map(String::from);
+
+            let input_context = messages.last()
+                .and_then(|m| m.content.as_deref())
+                .unwrap_or("")
+                .to_string();
+
+            let start_time = std::time::Instant::now();
             let response = self.call_llm(&messages, pool).await?;
+            let llm_duration = start_time.elapsed().as_millis() as u64;
 
             if let Some(tool_calls) = response.tool_calls.clone() {
-                self.persist_assistant_message(None, Some(&tool_calls))?;
+                // Preserve reasoning — previously this was passed as None
+                let reasoning = response.content.clone();
+
+                if let (Some(text), Some(events)) = (&reasoning, &self.context.events) {
+                    if !text.is_empty() {
+                        events.reasoning(&format!("task_{}", self.task.id()), text.clone());
+                    }
+                }
+
+                self.persist_assistant_message(reasoning.as_deref(), Some(&tool_calls))?;
 
                 // Separate return-triggering response tools from everything else
                 let (return_calls, non_return_calls): (Vec<_>, Vec<_>) = tool_calls.iter()
@@ -173,6 +252,8 @@ impl AgentExecution {
 
                 let (get_full_result_calls, toolbelt_calls): (Vec<_>, Vec<_>) = regular_calls.into_iter()
                     .partition(|tc| tc.function.name == "response::get_full_result");
+
+                let mut tool_results_for_trace: Vec<String> = Vec::new();
 
                 // Execute task management tools
                 for tool_call in &task_calls {
@@ -189,6 +270,7 @@ impl AgentExecution {
                     if let Some(events) = &self.context.events {
                         events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
                     }
+                    tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
                 }
 
@@ -211,6 +293,7 @@ impl AgentExecution {
                     if let Some(events) = &self.context.events {
                         events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
                     }
+                    tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
                 }
 
@@ -229,6 +312,7 @@ impl AgentExecution {
                     if let Some(events) = &self.context.events {
                         events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
                     }
+                    tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
                 }
 
@@ -248,6 +332,7 @@ impl AgentExecution {
                         if let Some(events) = &self.context.events {
                             events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
                         }
+                        tool_results_for_trace.push(result.clone());
                         self.persist_tool_message(tool_name, &result)?;
                     }
                 } else if !return_calls.is_empty() {
@@ -255,6 +340,23 @@ impl AgentExecution {
                         "Warning: response:: return tools mixed with other tools in batch — ignoring return tools"
                     );
                 }
+
+                let classification = classify_specialist_iteration(&tool_calls);
+                let tool_calls_json = serde_json::to_string(&tool_calls).ok();
+                let tool_results_json = serde_json::to_string(&tool_results_for_trace).ok();
+
+                let _ = pool.db().log_execution_trace(
+                    self.task.id(),
+                    self.agent.name,
+                    iteration_count,
+                    system_preview.as_deref(),
+                    &input_context,
+                    reasoning.as_deref(),
+                    tool_calls_json.as_deref(),
+                    tool_results_json.as_deref(),
+                    &classification,
+                    Some(llm_duration),
+                );
 
                 if specialist_state.should_return() || self.task.is_complete() {
                     break;
@@ -265,6 +367,20 @@ impl AgentExecution {
             // Text-only response — treat as implicit return
             if let Some(content) = &response.content {
                 let content_owned = content.clone();
+
+                let _ = pool.db().log_execution_trace(
+                    self.task.id(),
+                    self.agent.name,
+                    iteration_count,
+                    system_preview.as_deref(),
+                    &input_context,
+                    Some(&content_owned),
+                    None,
+                    None,
+                    "text_only",
+                    Some(llm_duration),
+                );
+
                 specialist_state.set_response_message(content_owned.clone());
                 self.persist_assistant_message(Some(&content_owned), None)?;
                 break;
@@ -463,5 +579,50 @@ impl AgentExecution {
             None,
             &mut self.message_count,
         )
+    }
+}
+
+fn classify_specialist_iteration(tool_calls: &[ToolCall]) -> String {
+    let has_return_with = tool_calls.iter().any(|tc| tc.function.name == "response::return_with_tool_call");
+    let has_return_as_is = tool_calls.iter().any(|tc| tc.function.name == "response::return_as_is");
+    let has_add = tool_calls.iter().any(|tc| tc.function.name == "response::add_to_response");
+    let has_get_full = tool_calls.iter().any(|tc| tc.function.name == "response::get_full_result");
+    let has_task = tool_calls.iter().any(|tc| tc.function.name.starts_with("task::"));
+    let has_toolbelt = tool_calls.iter().any(|tc| {
+        !tc.function.name.starts_with("response::") && !tc.function.name.starts_with("task::")
+    });
+
+    if (has_return_with || has_return_as_is) && has_toolbelt {
+        "mixed_return_ignored".to_string()
+    } else if has_return_with {
+        "return_with_tool_call".to_string()
+    } else if has_return_as_is {
+        "return_as_is".to_string()
+    } else if has_add {
+        "add_to_response".to_string()
+    } else if has_get_full {
+        "get_full_result".to_string()
+    } else if has_toolbelt {
+        "tool_call".to_string()
+    } else if has_task {
+        "task_management".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn classify_orchestrator_iteration(tool_calls: &[ToolCall]) -> String {
+    let has_delegation = tool_calls.iter().any(|tc| tc.function.name.starts_with("delegate::"));
+    let has_mark_complete = tool_calls.iter().any(|tc| tc.function.name == "task::mark_complete");
+    let has_task = tool_calls.iter().any(|tc| tc.function.name.starts_with("task::"));
+
+    if has_delegation {
+        "delegation".to_string()
+    } else if has_mark_complete {
+        "mark_complete".to_string()
+    } else if has_task {
+        "task_management".to_string()
+    } else {
+        "tool_call".to_string()
     }
 }

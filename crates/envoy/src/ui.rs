@@ -118,5 +118,9 @@ fn handle_event(event: &ChatEvent) {
         ChatEvent::Error { message } => {
             eprintln!("\n❌ Error: {}", message);
         }
+        ChatEvent::Reasoning { task, content } => {
+            print!("\x1b[2m\x1b[90m💭 [{}] {}\x1b[0m", task, content);
+            io::stdout().flush().ok();
+        }
     }
 }

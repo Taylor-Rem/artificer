@@ -461,6 +461,72 @@ impl Db {
 }
 
 // ============================================================================
+// EXECUTION TRACES
+// ============================================================================
+
+impl Db {
+    /// Log a single iteration of an agent's execution loop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn log_execution_trace(
+        &self,
+        task_id: u64,
+        agent_name: &str,
+        iteration: u32,
+        system_prompt_preview: Option<&str>,
+        input_context: &str,
+        reasoning: Option<&str>,
+        tool_calls: Option<&str>,
+        tool_results: Option<&str>,
+        classification: &str,
+        llm_duration_ms: Option<u64>,
+    ) -> Result<()> {
+        let now = now();
+        self.execute(
+            "INSERT INTO execution_traces
+             (task_id, agent_name, iteration, system_prompt_preview, input_context,
+              reasoning, tool_calls, tool_results, classification, created_at, llm_duration_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                task_id as i64,
+                agent_name,
+                iteration as i64,
+                system_prompt_preview,
+                input_context,
+                reasoning,
+                tool_calls,
+                tool_results,
+                classification,
+                now,
+                llm_duration_ms.map(|ms| ms as i64),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get all traces for a task, ordered by iteration.
+    pub fn get_execution_traces(&self, task_id: u64) -> Result<String> {
+        self.query(
+            "SELECT iteration, agent_name, classification, reasoning, tool_calls, tool_results,
+                    llm_duration_ms, created_at
+             FROM execution_traces
+             WHERE task_id = ?1
+             ORDER BY iteration",
+            rusqlite::params![task_id as i64],
+        )
+    }
+
+    /// Get the full detail for a specific iteration of a task trace.
+    pub fn get_execution_trace_detail(&self, task_id: u64, iteration: u32) -> Result<String> {
+        self.query(
+            "SELECT *
+             FROM execution_traces
+             WHERE task_id = ?1 AND iteration = ?2",
+            rusqlite::params![task_id as i64, iteration as i64],
+        )
+    }
+}
+
+// ============================================================================
 // GLOBAL INSTANCE
 // ============================================================================
 
