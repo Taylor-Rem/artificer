@@ -38,7 +38,7 @@ macro_rules! define_agents {
                             // Task management tools
                             $(
                                 if $has_task_tools {
-                                    use crate::agent::schema::task::TASK_TOOLS;
+                                    use crate::agent::tools::TASK_TOOLS;
                                     let task_tools: Vec<artificer_shared::Tool> = TASK_TOOLS
                                         .iter()
                                         .map(|schema| schema.to_tool())
@@ -50,7 +50,7 @@ macro_rules! define_agents {
                             // Delegation tools
                             $(
                                 if $has_delegation_tools {
-                                    use crate::agent::delegation_tools::DELEGATION_TOOLS;
+                                    use crate::agent::tools::DELEGATION_TOOLS;
                                     let delegation_tools: Vec<artificer_shared::Tool> = DELEGATION_TOOLS
                                         .iter()
                                         .map(|schema| schema.to_tool())
@@ -62,7 +62,7 @@ macro_rules! define_agents {
                             // Specialist control tools
                             $(
                                 if $has_specialist_tools {
-                                    use crate::agent::specialist_tools::SPECIALIST_CONTROL_TOOLS;
+                                    use crate::agent::tools::SPECIALIST_CONTROL_TOOLS;
                                     let specialist_ctrl_tools: Vec<artificer_shared::Tool> =
                                         SPECIALIST_CONTROL_TOOLS
                                             .iter()

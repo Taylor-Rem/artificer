@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use artificer_shared::db::Db;
-use crate::agent::AgentContext;
+use crate::agent::state::ExecutionContext;
 use crate::api::events::{EventSender, SseEvent};
 use crate::api::types::{
     ChatRequest,
@@ -131,13 +131,14 @@ pub async fn handle_chat(
     let agent_pool = state.agent_pool.clone();
 
     tokio::spawn(async move {
-        let context = AgentContext {
+        let context = ExecutionContext {
             device_id,
             device_key: req.device_key.clone(),
             conversation_id,
             parent_task_id: None,
             gpu,
             events: Some(events.clone()),
+            db: agent_pool.db().clone(),
         };
 
         // Get orchestrator and execute

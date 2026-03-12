@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use artificer_shared::schemas::{ToolSchema, ParameterSchema, ToolLocation};
 use serde_json::Value;
 use anyhow::Result;
-use crate::agent::execution::specialist_state::SpecialistState;
+use crate::agent::state::SpecialistExecution;
 
 pub static SPECIALIST_CONTROL_TOOLS: Lazy<Vec<ToolSchema>> = Lazy::new(|| vec![
     ToolSchema {
@@ -78,7 +78,7 @@ pub fn is_return_triggering_tool(name: &str) -> bool {
 }
 
 pub fn handle_specialist_control_tool(
-    state: &mut SpecialistState,
+    state: &mut SpecialistExecution,
     tool_name: &str,
     args: &Value,
 ) -> Result<String> {

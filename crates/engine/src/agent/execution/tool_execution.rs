@@ -3,19 +3,19 @@ use serde_json::Value;
 use std::sync::Arc;
 use artificer_shared::tools::get_tool_schema;
 use crate::pool::AgentPool;
-use crate::agent::schema::task::{handle_task_tool, is_task_tool};
+use crate::agent::tools::{handle_task_tool, is_task_tool};
 use super::tool_validation::validate_tool_call;
-use crate::agent::{AgentContext, Task};
+use crate::agent::state::{TaskState, ExecutionContext};
 
 /// Per-turn context for routing and executing tool calls.
 pub struct ToolExecutionContext<'a> {
-    pub task: &'a mut Task,
-    pub context: &'a AgentContext,
+    pub task: &'a mut TaskState,
+    pub context: &'a ExecutionContext,
     pub pool: &'a Arc<AgentPool>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
-    pub fn new(task: &'a mut Task, context: &'a AgentContext, pool: &'a Arc<AgentPool>) -> Self {
+    pub fn new(task: &'a mut TaskState, context: &'a ExecutionContext, pool: &'a Arc<AgentPool>) -> Self {
         Self { task, context, pool }
     }
 
@@ -27,7 +27,7 @@ impl<'a> ToolExecutionContext<'a> {
         // Emit tool call event
         if let Some(events) = &self.context.events {
             events.tool_call(
-                &format!("task_{}", self.task.id()),
+                &format!("task_{}", self.task.id),
                 tool_name,
                 args.clone(),
             );
@@ -55,14 +55,14 @@ impl<'a> ToolExecutionContext<'a> {
             match &result {
                 Ok(res) => {
                     events.tool_result(
-                        &format!("task_{}", self.task.id()),
+                        &format!("task_{}", self.task.id),
                         tool_name,
                         res.clone(),
                     );
                 }
                 Err(e) => {
                     events.tool_result(
-                        &format!("task_{}", self.task.id()),
+                        &format!("task_{}", self.task.id),
                         tool_name,
                         format!("ERROR: {}", e),
                     );
@@ -95,18 +95,19 @@ impl<'a> ToolExecutionContext<'a> {
         // Emit task switch event
         if let Some(events) = &self.context.events {
             events.task_switch(
-                &format!("task_{}", self.task.id()),
+                &format!("task_{}", self.task.id),
                 &format!("specialist_{}", agent_name),
             );
         }
 
-        let specialist_context = crate::agent::AgentContext {
+        let specialist_context = ExecutionContext {
             device_id: self.context.device_id,
             device_key: self.context.device_key.clone(),
-            conversation_id: self.task.conversation_id(),
-            parent_task_id: Some(self.task.id()),
-            gpu: self.task.gpu().clone(),
+            conversation_id: self.context.conversation_id,
+            parent_task_id: Some(self.task.id),
+            gpu: self.context.gpu.clone(),
             events: self.context.events.clone(),
+            db: self.context.db.clone(),
         };
 
         // Look up specialist again for AgentExecution::new
@@ -124,7 +125,7 @@ impl<'a> ToolExecutionContext<'a> {
         if let Some(events) = &self.context.events {
             events.task_switch(
                 &format!("specialist_{}", agent_name),
-                &format!("task_{}", self.task.id()),
+                &format!("task_{}", self.task.id),
             );
         }
 

@@ -1,17 +1,45 @@
-mod schema;
 pub mod implementations;
 pub mod macros;
 pub mod execution;
+pub mod state;
+pub mod tools;
 mod llm_types;
 mod llm_client;
-mod delegation_tools;
-pub mod specialist_tools;
 
 use artificer_shared::Tool;
-pub use schema::{AgentContext, AgentResponse, AgentRoles, ExecutionMode, Task};
+pub use state::{TaskState, ExecutionContext, AgentState, SpecialistExecution, TaskPhase};
 pub use implementations::AgentType;
 pub use execution::AgentExecution;
 pub use execution::ToolExecutionContext;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Full orchestrator with task management and planning loop
+    Agentic,
+    /// Simple one-off LLM call, no task overhead
+    OneTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRoles {
+    Orchestrator,
+    Specialist,
+    Background,
+}
+
+pub struct AgentResponse {
+    pub content: String,
+    pub success: bool,
+}
+
+impl AgentResponse {
+    pub fn complete(content: String) -> Self {
+        Self { content, success: true }
+    }
+    pub fn failed(content: String) -> Self {
+        Self { content, success: false }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Agent {

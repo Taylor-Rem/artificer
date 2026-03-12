@@ -222,13 +222,14 @@ impl Worker {
                     .ok_or_else(|| anyhow::anyhow!("Missing user_message in job args"))?
                     .to_string();
 
-                let context = crate::agent::AgentContext {
+                let context = crate::agent::state::ExecutionContext {
                     device_id: job.device_id.unwrap_or(0) as u64,
                     device_key: String::new(),
                     conversation_id,
                     parent_task_id: None,
                     gpu: gpu.clone(),
                     events: None,
+                    db: self.agent_pool.db().clone(),
                 };
 
                 let execution = crate::agent::AgentExecution::new(

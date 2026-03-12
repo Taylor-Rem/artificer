@@ -1,18 +1,15 @@
 pub mod tool_execution;
 pub use tool_execution::ToolExecutionContext;
 
-pub mod specialist_state;
-pub use specialist_state::SpecialistState;
-
 use anyhow::Result;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
-use crate::agent::{Agent, AgentContext, AgentResponse, Task};
+use crate::agent::{Agent, AgentResponse};
+use crate::agent::state::{TaskState, ExecutionContext, SpecialistExecution, AgentState};
+use crate::agent::tools::{handle_task_tool, is_task_tool, handle_specialist_control_tool, is_return_triggering_tool};
 use crate::agent::llm_client::LlmClient;
 use crate::agent::llm_types::LlmRequest;
-use crate::agent::schema::{AgentRoles, ExecutionMode};
-use crate::agent::specialist_tools::{is_return_triggering_tool, handle_specialist_control_tool};
-use crate::agent::schema::task::{handle_task_tool, is_task_tool};
+use crate::agent::{AgentRoles, ExecutionMode};
 use crate::pool::AgentPool;
 use artificer_shared::{Message, ToolCall};
 
@@ -22,8 +19,8 @@ pub mod tool_validation;
 
 pub struct AgentExecution {
     agent: Agent,
-    context: AgentContext,
-    task: Task,
+    context: ExecutionContext,
+    task_state: TaskState,
     agent_pool: Arc<AgentPool>,
     message_count: u32,
 }
@@ -31,26 +28,24 @@ pub struct AgentExecution {
 impl AgentExecution {
     pub fn new(
         agent: &Agent,
-        context: AgentContext,
+        context: ExecutionContext,
         goal: &str,
         pool: &Arc<AgentPool>,
     ) -> Self {
-        let task = Task::new(
-            &context,
-            context.parent_task_id,
-            goal,
-            pool.db().clone(),
-        );
+        let task_id = context.db
+            .create_task(context.device_id, context.conversation_id, context.parent_task_id, goal)
+            .expect("Failed to create task");
 
-        let message_count = pool
-            .db()
+        let task_state = TaskState::new(task_id, context.parent_task_id, goal);
+
+        let message_count = context.db
             .get_message_count(context.conversation_id)
             .unwrap_or(0);
 
         Self {
             agent: agent.clone(),
             context,
-            task,
+            task_state,
             agent_pool: pool.clone(),
             message_count,
         }
@@ -85,7 +80,7 @@ impl AgentExecution {
         let mut messages = self.build_initial_messages();
 
         // Persist and add the current user message to the LLM context
-        let user_goal = self.task.user_goal.clone();
+        let user_goal = self.task_state.user_goal.clone();
         self.persist_user_message(&user_goal)?;
         messages.push(Message {
             role: "user".to_string(),
@@ -104,7 +99,6 @@ impl AgentExecution {
                 .map(|s| if s.len() > 500 { &s[..500] } else { s })
                 .map(String::from);
 
-            // Log the last user message as the input context (not the full history)
             let input_context = messages.iter().rev()
                 .find(|m| m.role == "user")
                 .and_then(|m| m.content.as_deref())
@@ -120,7 +114,7 @@ impl AgentExecution {
 
                 if let (Some(text), Some(events)) = (&reasoning, &self.context.events) {
                     if !text.is_empty() {
-                        events.reasoning(&format!("task_{}", self.task.id()), text.clone());
+                        events.reasoning(&format!("task_{}", self.task_state.id), text.clone());
                     }
                 }
 
@@ -136,7 +130,7 @@ impl AgentExecution {
                 let tool_results_json = serde_json::to_string(&tool_results).ok();
 
                 let _ = pool.db().log_execution_trace(
-                    self.task.id(),
+                    self.task_state.id,
                     self.agent.name,
                     iteration_count,
                     system_preview.as_deref(),
@@ -161,7 +155,10 @@ impl AgentExecution {
                     });
                 }
 
-                if self.task.is_complete() {
+                self.task_state.persist_if_dirty(&self.context)?;
+
+                if self.task_state.is_complete() {
+                    self.task_state.persist_complete(&self.context)?;
                     break;
                 }
                 continue;
@@ -172,7 +169,7 @@ impl AgentExecution {
                 let content_owned = content.clone();
 
                 let _ = pool.db().log_execution_trace(
-                    self.task.id(),
+                    self.task_state.id,
                     self.agent.name,
                     iteration_count,
                     system_preview.as_deref(),
@@ -200,8 +197,7 @@ impl AgentExecution {
     async fn execute_specialist(&mut self, pool: &Arc<AgentPool>) -> Result<AgentResponse> {
         const MAX_SPECIALIST_ITERATIONS: u32 = 25;
 
-        let mut specialist_state = SpecialistState::new();
-        let orchestrator_request = self.task.user_goal.clone();
+        let mut specialist_exec = SpecialistExecution::new(self.task_state.clone());
         let mut iteration_count: u32 = 0;
 
         loop {
@@ -209,13 +205,13 @@ impl AgentExecution {
             if iteration_count > MAX_SPECIALIST_ITERATIONS {
                 eprintln!(
                     "Specialist hit max iteration limit ({}) for task {}",
-                    MAX_SPECIALIST_ITERATIONS, self.task.id()
+                    MAX_SPECIALIST_ITERATIONS, specialist_exec.task.id
                 );
-                specialist_state.force_return();
+                specialist_exec.force_return();
                 break;
             }
 
-            let messages = self.build_specialist_messages(&specialist_state, &orchestrator_request);
+            let messages = self.build_specialist_messages(&specialist_exec);
 
             let system_preview = messages.first()
                 .and_then(|m| m.content.as_deref())
@@ -232,12 +228,11 @@ impl AgentExecution {
             let llm_duration = start_time.elapsed().as_millis() as u64;
 
             if let Some(tool_calls) = response.tool_calls.clone() {
-                // Preserve reasoning — previously this was passed as None
                 let reasoning = response.content.clone();
 
                 if let (Some(text), Some(events)) = (&reasoning, &self.context.events) {
                     if !text.is_empty() {
-                        events.reasoning(&format!("task_{}", self.task.id()), text.clone());
+                        events.reasoning(&format!("task_{}", specialist_exec.task.id), text.clone());
                     }
                 }
 
@@ -261,14 +256,14 @@ impl AgentExecution {
                     let args = &tool_call.function.arguments;
 
                     if let Some(events) = &self.context.events {
-                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                        events.tool_call(&format!("task_{}", specialist_exec.task.id), tool_name, args.clone());
                     }
 
-                    let result = handle_task_tool(&mut self.task, tool_name, args)
+                    let result = handle_task_tool(&mut specialist_exec.task, tool_name, args)
                         .unwrap_or_else(|e| format!("Error: {}", e));
 
                     if let Some(events) = &self.context.events {
-                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                        events.tool_result(&format!("task_{}", specialist_exec.task.id), tool_name, result.clone());
                     }
                     tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
@@ -280,7 +275,7 @@ impl AgentExecution {
                     let args = &tool_call.function.arguments;
 
                     if let Some(events) = &self.context.events {
-                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                        events.tool_call(&format!("task_{}", specialist_exec.task.id), tool_name, args.clone());
                     }
 
                     let result = pool.tool_executor()
@@ -288,10 +283,10 @@ impl AgentExecution {
                         .await
                         .unwrap_or_else(|e| format!("Error: {}", e));
 
-                    specialist_state.record_tool_call(tool_name.clone(), args.clone(), result.clone());
+                    specialist_exec.record_tool_call(tool_name.clone(), args.clone(), result.clone());
 
                     if let Some(events) = &self.context.events {
-                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                        events.tool_result(&format!("task_{}", specialist_exec.task.id), tool_name, result.clone());
                     }
                     tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
@@ -303,14 +298,14 @@ impl AgentExecution {
                     let args = &tool_call.function.arguments;
 
                     if let Some(events) = &self.context.events {
-                        events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                        events.tool_call(&format!("task_{}", specialist_exec.task.id), tool_name, args.clone());
                     }
 
-                    let result = handle_specialist_control_tool(&mut specialist_state, tool_name, args)
+                    let result = handle_specialist_control_tool(&mut specialist_exec, tool_name, args)
                         .unwrap_or_else(|e| format!("Error: {}", e));
 
                     if let Some(events) = &self.context.events {
-                        events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                        events.tool_result(&format!("task_{}", specialist_exec.task.id), tool_name, result.clone());
                     }
                     tool_results_for_trace.push(result.clone());
                     self.persist_tool_message(tool_name, &result)?;
@@ -323,14 +318,14 @@ impl AgentExecution {
                         let args = &tool_call.function.arguments;
 
                         if let Some(events) = &self.context.events {
-                            events.tool_call(&format!("task_{}", self.task.id()), tool_name, args.clone());
+                            events.tool_call(&format!("task_{}", specialist_exec.task.id), tool_name, args.clone());
                         }
 
-                        let result = handle_specialist_control_tool(&mut specialist_state, tool_name, args)
+                        let result = handle_specialist_control_tool(&mut specialist_exec, tool_name, args)
                             .unwrap_or_else(|e| format!("Error: {}", e));
 
                         if let Some(events) = &self.context.events {
-                            events.tool_result(&format!("task_{}", self.task.id()), tool_name, result.clone());
+                            events.tool_result(&format!("task_{}", specialist_exec.task.id), tool_name, result.clone());
                         }
                         tool_results_for_trace.push(result.clone());
                         self.persist_tool_message(tool_name, &result)?;
@@ -346,7 +341,7 @@ impl AgentExecution {
                 let tool_results_json = serde_json::to_string(&tool_results_for_trace).ok();
 
                 let _ = pool.db().log_execution_trace(
-                    self.task.id(),
+                    specialist_exec.task.id,
                     self.agent.name,
                     iteration_count,
                     system_preview.as_deref(),
@@ -358,7 +353,7 @@ impl AgentExecution {
                     Some(llm_duration),
                 );
 
-                if specialist_state.should_return() || self.task.is_complete() {
+                if specialist_exec.should_terminate() {
                     break;
                 }
                 continue;
@@ -369,7 +364,7 @@ impl AgentExecution {
                 let content_owned = content.clone();
 
                 let _ = pool.db().log_execution_trace(
-                    self.task.id(),
+                    specialist_exec.task.id,
                     self.agent.name,
                     iteration_count,
                     system_preview.as_deref(),
@@ -381,7 +376,7 @@ impl AgentExecution {
                     Some(llm_duration),
                 );
 
-                specialist_state.set_response_message(content_owned.clone());
+                specialist_exec.set_response_message(content_owned.clone());
                 self.persist_assistant_message(Some(&content_owned), None)?;
                 break;
             }
@@ -389,27 +384,18 @@ impl AgentExecution {
             return Err(anyhow::anyhow!("Specialist returned empty response"));
         }
 
-        let final_message = specialist_state.response_message
-            .clone()
-            .unwrap_or_else(|| "Task completed.".to_string());
-
-        let summary = specialist_state.build_delegation_summary(&final_message);
+        let summary = specialist_exec.build_response();
+        specialist_exec.task.persist_if_dirty(&self.context)?;
         Ok(AgentResponse::complete(summary))
     }
 
-    fn build_specialist_messages(
-        &self,
-        specialist_state: &SpecialistState,
-        orchestrator_request: &str,
-    ) -> Vec<Message> {
+    fn build_specialist_messages(&self, specialist_exec: &SpecialistExecution) -> Vec<Message> {
         let system_prompt = self.agent.build_system_prompt("");
-
-        let task_xml = self.task.state_summary_xml();
-        let state_xml = specialist_state.build_state_xml(&task_xml);
+        let state_xml = specialist_exec.build_state_xml();
 
         let user_content = format!(
             "<request>\n{}\n</request>\n\n<execution_state>\n{}\n</execution_state>",
-            orchestrator_request,
+            specialist_exec.task.user_goal,
             state_xml
         );
 
@@ -436,7 +422,7 @@ impl AgentExecution {
             },
             Message {
                 role: "user".to_string(),
-                content: Some(self.task.user_goal.clone()),
+                content: Some(self.task_state.user_goal.clone()),
                 tool_calls: None,
             },
         ];
@@ -444,10 +430,12 @@ impl AgentExecution {
         let response = self.call_llm(&messages, pool).await?;
 
         if let Some(content) = response.content {
-            self.task.mark_complete();
+            self.task_state.mark_complete();
+            self.task_state.persist_complete(&self.context)?;
             Ok(AgentResponse::complete(content))
         } else {
-            self.task.mark_failed(None);
+            self.task_state.mark_failed();
+            self.task_state.persist_failed(&self.context)?;
             Err(anyhow::anyhow!("OneTime execution got no content"))
         }
     }
@@ -459,7 +447,6 @@ impl AgentExecution {
             tool_calls: None,
         };
 
-        // Orchestrator loads conversation history; specialists start fresh
         if self.agent.role == AgentRoles::Orchestrator {
             let history = self
                 .agent_pool
@@ -476,7 +463,7 @@ impl AgentExecution {
     }
 
     fn build_system_prompt(&self) -> String {
-        self.agent.build_system_prompt(&self.task.state_summary())
+        self.agent.build_system_prompt(&self.task_state.build_task_xml())
     }
 
     fn update_system_prompt(&self, messages: &mut Vec<Message>) {
@@ -488,8 +475,8 @@ impl AgentExecution {
     }
 
     async fn call_llm(&self, messages: &[Message], pool: &Arc<AgentPool>) -> Result<Message> {
-        let llm_client = LlmClient::new(pool.client(), self.task.gpu());
-        let request = LlmRequest::new(self.task.gpu().model.clone(), messages.to_vec())
+        let llm_client = LlmClient::new(pool.client(), &self.context.gpu);
+        let request = LlmRequest::new(self.context.gpu.model.clone(), messages.to_vec())
             .with_tools(self.agent.tools.clone());
 
         if let Some(events) = &self.context.events {
@@ -506,7 +493,7 @@ impl AgentExecution {
         pool: &Arc<AgentPool>,
     ) -> Result<Vec<String>> {
         let mut results = Vec::new();
-        let mut tool_ctx = ToolExecutionContext::new(&mut self.task, &self.context, pool);
+        let mut tool_ctx = ToolExecutionContext::new(&mut self.task_state, &self.context, pool);
 
         for tool_call in tool_calls {
             let result = tool_ctx
@@ -547,7 +534,7 @@ impl AgentExecution {
     fn persist_user_message(&mut self, content: &str) -> Result<()> {
         self.agent_pool.db().add_message(
             self.context.conversation_id,
-            Some(self.task.id() as i64),
+            Some(self.task_state.id as i64),
             "user",
             Some(content),
             None,
@@ -562,7 +549,7 @@ impl AgentExecution {
     ) -> Result<()> {
         self.agent_pool.db().add_message(
             self.context.conversation_id,
-            Some(self.task.id() as i64),
+            Some(self.task_state.id as i64),
             "assistant",
             content,
             tool_calls,
@@ -573,7 +560,7 @@ impl AgentExecution {
     fn persist_tool_message(&mut self, _tool_name: &str, result: &str) -> Result<()> {
         self.agent_pool.db().add_message(
             self.context.conversation_id,
-            Some(self.task.id() as i64),
+            Some(self.task_state.id as i64),
             "tool",
             Some(result),
             None,
