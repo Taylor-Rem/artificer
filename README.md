@@ -1,166 +1,131 @@
 # Artificer
 
-A self-hosted AI infrastructure system built in Rust. Artificer runs on your own hardware and provides a persistent, autonomous agent capable of completing long-running tasks — not just answering questions.
+A self-hosted agent system in Rust: give it a goal, and an orchestrator agent
+plans, delegates to specialist agents, records its progress in SQLite, and
+keeps going until it marks the task complete. Models run on your own GPUs.
 
-## What It Is
+- **Who it is for:** one person or a small team with a few local GPUs who wants
+  long-running agent work done on their own hardware. Nothing leaves the
+  machine except web searches a specialist makes on purpose.
+- **Status:** built 2026-01-26 to 2026-03-11 by Taylor Remund; **dormant since
+  2026-03-11, not maintained.**
+- **How it was built:** with AI coding tools, Taylor Remund as architect and
+  reviewer.
+- **Stack:** Rust (edition 2024) · Tokio · Axum · SQLite (rusqlite, WAL) ·
+  reqwest · Ollama for models · Brave Search API for web research.
+- **Tests:** none yet. Four placeholder `#[tokio::test]` functions exist, all
+  `#[ignore]` with TODO bodies.
+- **Licence:** MIT (see [LICENSE](LICENSE)).
 
-Most AI interfaces are chatbots. You ask something, they respond, the interaction ends. Artificer is built around a different model: you give it a goal, and it works until the goal is achieved. It plans, delegates to specialists, evaluates its own progress, and keeps going until the work is actually done.
+## What it does
 
-It runs entirely on your hardware. No data leaves your machine. Accessible from anywhere via Tailscale.
+- Accepts a request from a client over HTTP and streams the work back as
+  server-sent events: reasoning, tool calls, tool results, the answer.
+- Runs an **Orchestrator** that sets a goal and a plan, tracks steps and notes,
+  and delegates. It does no file or web work itself.
+- Delegates to three **specialists**, each with its own loop (at most 25
+  iterations) and toolbelt:
+  - `FileSmith`: 15 file tools, executed on the client machine through envoy
+  - `WebResearcher`: 3 tools over the Brave Search API
+  - `Archivist`: 6 tools over the conversation database
+- Assigns GPUs from `hardware.json`: interactive GPUs for user requests,
+  background GPUs for housekeeping (conversation titles). If every
+  interactive GPU is busy, the request gets HTTP 503 `resource_busy`.
+- Persists everything in SQLite: devices, conversations, tasks (goal, plan,
+  working memory, status), messages, background jobs and a per-iteration
+  execution trace.
 
-### Installation
+## Architecture
 
-Artificer is a distributed system with two components:
-
-**Engine** — The server. Runs on your primary machine alongside your GPUs. Hosts the Orchestrator, manages GPU assignment, maintains the database, and runs background jobs.
-
-**Envoy** — A lightweight client. Runs on any machine. Sends requests to the engine over HTTP and handles client-side tool execution (file operations run where the files are).
-
-### The Orchestrator
-
-The core of the engine. When a request comes in, the Orchestrator:
-
-1. Creates a task record and defines success criteria
-2. Sets a plan using its working memory tools
-3. Delegates work to specialists
-4. Evaluates results against the original goal
-5. Continues until the goal is genuinely complete
-
-The Orchestrator holds the goal and reasons about progress. It does not do the work itself — it directs specialists and synthesizes their output. This keeps its context clean across long tasks and allows it to work through complex multi-step problems without losing the thread.
-
-### Specialists
-
-Specialists are focused agents with their own reasoning loops. The Orchestrator delegates to them with specific instructions and gets back synthesized conclusions — not raw tool output.
-
-**Interactive specialists** run on the primary GPU alongside the Orchestrator:
-- `web_research` — Searches the web, fetches pages, synthesizes findings
-- `file_smith` — Reads, writes, and manipulates files on the Envoy client
-
-**Background specialists** run on a secondary GPU while the primary stays available:
-- `title_generation` — Generates conversation and task titles
-- `summarization` — Summarizes completed conversations and tasks
-- `memory_extraction` — Extracts long-term facts, preferences, and context
-
-### GPU Pool
-
-Hardware is declared in `hardware.json` at the workspace root. The engine reads this at startup and manages GPU assignment at runtime.
-
-```json
-{
-  "gpus": [
-    {
-      "id": "p40_primary",
-      "url": "http://localhost:11435",
-      "model": "qwen2.5:32b-instruct-q4_K_M",
-      "role": "interactive"
-    },
-    {
-      "id": "rtx3070_background",
-      "url": "http://localhost:11434",
-      "model": "qwen3:8b",
-      "role": "background"
-    }
-  ]
-}
-```
-
-Interactive GPUs are assigned to Orchestrator tasks. Background GPUs handle summarization, title generation, and memory extraction. Adding a second interactive GPU automatically enables two concurrent Orchestrator tasks — no code changes required.
-
-### Database
-
-SQLite with WAL mode. All state is local.
-
-- **conversations** — Containers for message history
-- **tasks** — One per user request. Tracks goal, plan, working memory, and status
-- **messages** — Full message history linked to both conversation and task
-- **local_data** — Long-term memory: facts, preferences, and context per device
-- **background** — Job queue for post-completion processing
-- **keywords** — Extracted from tasks for searchability
-
-### Working Memory
-
-The Orchestrator maintains task state across its entire execution:
-
-- `set_plan` / `set_current_step` — Track where it is in the work
-- `set_state` / `get_state` — Key-value store for counters, targets, accumulated results
-- `checkpoint` — Persist progress and prune context for long tasks
-- `mark_complete` — Explicit completion signal before the final response
-
-Working memory is persisted to the database on every mutation. Context pruning rebuilds the prompt from task state rather than replaying history, so the Orchestrator can work through arbitrarily long tasks without degrading.
-
-## Project Structure
+One Cargo workspace with three crates. **engine** (binary `artificer`) is the
+server: an Axum API with five routes, the agent runtime, the GPU pool and a
+background worker. **envoy** (binary `envoy`) is the terminal client; it
+registers the machine as a device, sends requests, and runs a small tool
+server on port 8081 so file operations happen where the files are. **shared**
+is the library both use: the SQLite layer, the tool registry and toolbelts,
+and the executor that runs a tool in-process or forwards it to envoy. Task
+state is kept outside the transcript: the orchestrator's system prompt is
+rebuilt from it every iteration, and each specialist iteration is built from
+scratch from its current state, so a specialist never replays its history.
 
 ```
 artificer/
-├── hardware.json          # GPU configuration
-├── crates/
-│   ├── engine/            # Server
-│   │   └── src/
-│   │       ├── api/       # HTTP handlers, SSE streaming, middleware
-│   │       ├── orchestrator/  # Main loop, task state, tools, system prompt
-│   │       ├── specialist/    # Registry and execution for all specialists
-│   │       ├── background/    # Background job workers
-│   │       └── pool.rs        # GPU pool and acquisition
-│   ├── envoy/             # Client
-│   │   └── src/
-│   │       ├── client.rs  # HTTP communication with engine
-│   │       ├── tools.rs   # Client-side tool execution (file operations)
-│   │       └── ui.rs      # Terminal interface
-│   └── shared/            # Types shared between engine and envoy
-│       └── src/
-│           ├── db/        # Database layer (all persistence logic)
-│           └── tools/     # Tool definitions and toolbelts
+├── hardware.json              # GPUs: endpoint, model, role
+├── .env.example               # BRAVE_API_KEY, ENVOY_URL
+├── justfile                   # dev-engine, dev-envoy, build, test
+└── crates/
+    ├── engine/src/
+    │   ├── api/               # routes, handlers, SSE events, middleware
+    │   ├── agent/             # agents, execution loop, task state, tools, prompts
+    │   ├── pool/              # GPU pool and agent pool
+    │   └── background/        # background job worker
+    ├── envoy/src/             # client: config, HTTP client, terminal UI, tool server
+    └── shared/src/
+        ├── db/                # SQLite schema and persistence
+        ├── tools/             # tool registry and toolbelts
+        └── executor/          # local vs. client tool execution
 ```
 
-## Hardware
+## Running it
 
-Developed and tested on:
-- **NVIDIA Tesla P40** (24GB VRAM) — Primary/interactive GPU, running `qwen2.5:32b-instruct-q4_K_M` via Ollama on port 11435
-- **NVIDIA RTX 3070** (8GB VRAM) — Background GPU, running `qwen3:8b` via Ollama on port 11434
+Not re-verified since the last commit (2026-03-11). What the repository
+provides:
 
-The P40 keeps models loaded for interactive response times. The 3070 unloads immediately after background tasks to minimize idle power draw.
+**Prerequisites:** Rust (stable, edition 2024); Ollama serving the models
+named in `hardware.json`; a Brave Search API key for web research. The
+author's setup also used Tailscale for remote access.
 
-Artificer is designed to scale horizontally with hardware. Adding a second P40 to `hardware.json` enables two concurrent Orchestrator sessions automatically.
+1. Edit `hardware.json` in the workspace root: one entry per GPU with an
+   `id`, the Ollama `url`, the `model`, and a `role` of `interactive` or
+   `background`.
+2. Copy `.env.example` to `.env` and set `BRAVE_API_KEY`. `ENVOY_URL`
+   defaults to `http://localhost:8081`.
+3. Start the engine from the workspace root (it creates `memory.db` in the
+   current directory and listens on `0.0.0.0:8080`):
+   ```bash
+   cargo run --bin artificer
+   ```
+4. Start a client (on the same or another machine):
+   ```bash
+   cargo run --bin envoy                         # interactive chat
+   cargo run --bin envoy -- "your message"       # one message
+   cargo run --bin envoy -- config set server http://<engine-host>:8080
+   ```
+   envoy keeps its settings in `~/.config/envoy/config.json` and registers
+   the machine as a device on first run.
 
-## Prerequisites
+With [just](https://github.com/casey/just) and `cargo-watch`: `just
+dev-engine`, `just dev-envoy` (hot reload), `just build`, `just test`.
 
-- Rust (stable)
-- Ollama with models pulled for each GPU
-- Tailscale (for remote access)
-- NVIDIA drivers and CUDA (for GPU power management)
+Note: `SERVER_ADDR` in `.env.example` is not read; the address is fixed in
+`crates/engine/src/api/server.rs`.
 
-## Running
+## Hardware it was developed on
 
-```bash
-# Start the engine
-cd crates/engine
-cargo run
+- NVIDIA Tesla P40 (24 GB), interactive, `qwen2.5:32b-instruct-q4_K_M` via
+  Ollama on port 11435
+- NVIDIA RTX 3070 (8 GB), background, `qwen3:8b` via Ollama on port 11434
 
-# Start an envoy client (on any machine with access)
-cd crates/envoy
-cargo run
-```
+Adding another interactive GPU to `hardware.json` lets two orchestrator tasks
+run at once without code changes.
 
-For development with hot reloading:
+## Design principles
 
-```bash
-cargo watch -x run
-```
+**Tasks over conversations.** The unit of work is a task with a goal and a
+completion state; conversations are containers.
 
-## Configuration
+**Delegation over monolith.** The orchestrator decides what to do;
+specialists decide how. Neither does the other's job.
 
-The engine reads `hardware.json` from the workspace root. The envoy reads a config file specifying the engine URL and device key.
+**Hardware drives architecture.** GPU assignment and model choice are
+configuration, not code.
 
-Device authentication is handled at the engine level. Each Envoy registers with a unique device key, scoping its memory and conversations to that device.
+**Persistence by default.** Task state is written to the database after each
+round of tool calls, so a crash loses at most the round in progress.
 
-## Design Principles
+**Local first.** Data stays on your hardware; the network is used only when a
+specialist makes a web request.
 
-**Tasks over conversations.** The fundamental unit is a task with a goal and a completion state, not an exchange of messages. Conversations are just containers.
+## Licence
 
-**Delegation over monolith.** The Orchestrator reasons about what to do. Specialists reason about how to do it. Neither does the other's job.
-
-**Hardware drives architecture.** GPU assignment, model selection, and power management are explicit decisions made in configuration, not hidden inside code.
-
-**Persistence by default.** Working memory is written to the database on every mutation. A crash mid-task loses nothing except the current model call.
-
-**Local first.** All data stays on your hardware. External network access only happens when a specialist explicitly makes a web request.
+MIT. See [LICENSE](LICENSE).
