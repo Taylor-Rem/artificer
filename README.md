@@ -88,6 +88,16 @@ The Orchestrator maintains task state across its entire execution:
 
 Working memory is persisted to the database on every mutation. Context pruning rebuilds the prompt from task state rather than replaying history, so the Orchestrator can work through arbitrarily long tasks without degrading.
 
+## Case study
+
+[docs/CASE-STUDY.md](docs/CASE-STUDY.md) explains why Artificer is built the
+way it is: task state kept outside the transcript, GPUs acquired and released
+explicitly, one tool registry shared by the engine and the envoy client, and
+agents declared with a macro, each with its trade-off. It also says plainly how
+it was built (AI-assisted, with Taylor Remund as architect and reviewer) and
+where it stands: built 2026-01-26 to 2026-03-11, dormant since, no automated
+tests yet. Every number in it was measured and the commands are listed.
+
 ## Project Structure
 
 ```
